@@ -1,0 +1,109 @@
+// Copyright (c) 2020, Conf-Group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+syntax = "proto3";
+
+package core;
+
+import "rpc.proto";
+
+message AddPeerRequest {
+  string groupID = 1;
+  string leaderID = 2;
+  string peerID = 3;
+}
+
+message AddPeerResponse {
+  repeated string oldPeers = 1;
+  repeated string newPeers = 2;
+  ErrorResponse errorResponse = 99;
+}
+
+message RemovePeerRequest {
+  string groupID = 1;
+  string leaderID = 2;
+  string peerID = 3;
+}
+
+message RemovePeerResponse {
+  repeated string oldPeers = 1;
+  repeated string newPeers = 2;
+  ErrorResponse errorResponse = 99;
+}
+
+message ChangePeersRequest {
+  string groupID = 1;
+  string leaderID = 2;
+  repeated string newPeers = 3;
+}
+
+message ChangePeersResponse {
+  repeated string oldPeers = 1;
+  repeated string newPeers = 2;
+  ErrorResponse errorResponse = 99;
+}
+
+message SnapshotRequest {
+  string groupID = 1;
+  string peerID = 2;
+};
+
+message ResetPeerRequest {
+  string groupID = 1;
+  string peerID = 2;
+  repeated string oldPeers = 3;
+  repeated string newPeers = 4;
+}
+
+message TransferLeaderRequest {
+  string groupID = 1;
+  string leaderID = 2;
+  string peerID = 3;
+}
+
+message GetLeaderRequest {
+  string groupID = 1;
+  string peerID = 2;
+}
+
+message GetLeaderResponse {
+  string leaderID = 1;
+  ErrorResponse errorResponse = 99;
+}
+
+message GetPeersRequest {
+  string groupID = 1;
+  string leaderID = 2;
+  bool onlyAlive = 3;
+}
+
+message GetPeersResponse {
+  repeated string peers = 1;
+  repeated string learners = 2;
+  ErrorResponse errorResponse = 99;
+}
+
+message AddLearnersRequest {
+  string groupID = 1;
+  string leaderID = 2;
+  repeated string learners = 3;
+}
+
+message RemoveLearnersRequest {
+  string groupID = 1;
+  string leaderID = 2;
+  repeated string learners = 3;
+}
+
+message ResetLearnersRequest {
+  string groupID = 1;
+  string leaderID = 2;
+  repeated string learners = 3;
+}
+
+message LearnersOpResponse {
+  repeated string oldLearners = 1;
+  repeated string newLearners = 2;
+  ErrorResponse errorResponse = 99;
+}

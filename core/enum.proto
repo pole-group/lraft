@@ -1,0 +1,23 @@
+// Copyright (c) 2020, Conf-Group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+syntax = "proto3";
+
+package core;
+
+enum EntryType {
+  EntryTypeUnKnow = 0;
+  EntryTypeNoOp = 1;
+  EntryTypeData = 2;
+  EntryTypeConfiguration = 3;
+};
+
+enum ErrorType {
+  ErrorTypeNone = 0;
+  ErrorTypeLog = 1;
+  ErrorTypeStable = 2;
+  ErrorTypeSnapshot = 3;
+  ErrorTypeStateMachine = 4;
+  ErrorTypeMeta = 5;
+};

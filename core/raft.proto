@@ -1,0 +1,32 @@
+// Copyright (c) 2020, Conf-Group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+syntax = "proto3";
+
+package core;
+
+import "enum.proto";
+
+message EntryMeta {
+  int64 term = 1;
+  EntryType type = 2;
+  repeated string peers = 3;
+  int64 dataLen = 4;
+  // Don't change field id of `old_peers' in the consideration of backward
+  // compatibility
+  repeated string oldPeers = 5;
+  // Checksum fot this log entry, since 1.2.6, added by boyan@antfin.com
+  int64 checksum = 6;
+  repeated string learners = 7;
+  repeated string oldLearners = 8;
+};
+
+message SnapshotMeta {
+  int64 lastIncludedIndex = 1;
+  int64 lastIncludedTerm = 2;
+  repeated string peers = 3;
+  repeated string oldPeers = 4;
+  repeated string learners = 5;
+  repeated string oldLearners = 6;
+}

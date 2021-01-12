@@ -1,0 +1,21 @@
+// Copyright (c) 2020, Conf-Group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+syntax = "proto3";
+
+package core;
+
+import "enum.proto";
+
+message PBLogEntry {
+  EntryType type = 1;
+  int64 term = 2;
+  int64 index = 3;
+  repeated bytes peers = 4;
+  repeated bytes oldPeers = 5;
+  bytes data = 6;
+  int64 checksum = 7;
+  repeated bytes learners = 8;
+  repeated bytes oldLearners = 9;
+};

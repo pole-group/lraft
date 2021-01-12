@@ -1,0 +1,117 @@
+// Copyright (c) 2020, Conf-Group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+syntax = "proto3";
+
+package core;
+
+import "raft.proto";
+import "enum.proto";
+
+message PingRequest {
+  int64 sendTimestamp = 1;
+}
+
+message ErrorResponse {
+  int32 errorCode = 1;
+  string errorMsg = 2;
+}
+
+message InstallSnapshotRequest {
+  string groupID = 1;
+  string serverID = 2;
+  string peerID = 3;
+  int64 term = 4;
+  SnapshotMeta meta = 5;
+  string uri = 6;
+};
+
+message InstallSnapshotResponse {
+  int64 term = 1;
+  bool success = 2;
+  ErrorResponse errorResponse = 99;
+};
+
+message TimeoutNowRequest {
+  string groupID = 1;
+  string serverID = 2;
+  string peerID = 3;
+  int64 term = 4;
+}
+
+message TimeoutNowResponse {
+  int64 term = 1;
+  bool success = 2;
+  ErrorResponse errorResponse = 99;
+}
+
+message RequestVoteRequest {
+  string groupID = 1;
+  string serverID = 2;
+  string peerID = 3;
+  int64 term = 4;
+  int64 lastLogTerm = 5;
+  int64 lastLogIndex = 6;
+  bool preVote = 7;
+};
+
+message RequestVoteResponse {
+  int64 term = 1;
+  bool granted = 2;
+  ErrorResponse errorResponse = 99;
+};
+
+message AppendEntriesRequestHeader {
+  string groupID = 1;
+  string serverID = 2;
+  string peerID = 3;
+};
+
+message AppendEntriesRequest {
+  string groupID = 1;
+  string serverID = 2;
+  string peerID = 3;
+  int64 term = 4;
+  int64 prevLogTerm = 5;
+  int64 prevLogIndex = 6;
+  repeated EntryMeta entries = 7;
+  int64 committedIndex = 8;
+  bytes data = 9;
+};
+
+message AppendEntriesResponse {
+  int64 term = 1;
+  bool success = 2;
+  int64 last_log_index = 3;
+  ErrorResponse errorResponse = 99;
+};
+
+message GetFileRequest {
+  int64 readerID = 1;
+  string filename = 2;
+  int64 count = 3;
+  int64 offset = 4;
+  bool readPartly = 5;
+}
+
+message GetFileResponse {
+  // Data is in attachment
+  bool eof = 1;
+  bytes data = 2;
+  int64 readSize = 3;
+  ErrorResponse errorResponse = 99;
+}
+
+message ReadIndexRequest {
+  string groupID = 1;
+  string serverID = 2;
+  repeated bytes entries = 3;
+  string peerID = 4;
+}
+
+message ReadIndexResponse {
+  int64 index = 1;
+  bool success = 2;
+  ErrorResponse errorResponse = 99;
+}

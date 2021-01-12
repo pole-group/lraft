@@ -1,0 +1,33 @@
+// Copyright (c) 2020, Conf-Group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+syntax = "proto3";
+
+package core;
+
+import "localfilemetadata.proto";
+import "raft.proto";
+
+message ConfigurationPBMeta {
+  repeated string peers = 1;
+  repeated string oldPeers = 2;
+};
+
+message LogPBMeta {
+  int64 firstLogIndex = 1;
+};
+
+message StablePBMeta {
+  int64 term = 1;
+  string votedFor = 2;
+};
+
+message LocalSnapshotPbMeta {
+  message File {
+    string name = 1;
+    LocalFileMeta meta = 2;
+  };
+  SnapshotMeta meta = 1;
+  repeated File files = 2;
+}

@@ -1,0 +1,18 @@
+// Copyright (c) 2020, Conf-Group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+syntax = "proto3";
+
+package core;
+
+enum FileSource {
+  FILE_SOURCE_LOCAL = 0;
+  FILE_SOURCE_REFERENCE = 1;
+}
+
+message LocalFileMeta {
+  bytes userMeta = 1;
+  FileSource source = 2;
+  string checksum = 3;
+}
