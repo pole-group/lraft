@@ -3,14 +3,13 @@ package storage
 import (
 	"github.com/golang/protobuf/proto"
 
-	"lraft"
-	"lraft/core"
-	"lraft/entity"
+	"github.com/pole-group/lraft/core"
+	"github.com/pole-group/lraft/entity"
 )
 
 const (
-	LRaftSnapshotMetaFile   = "__raft_snapshot_meta"
-	LRaftSnapshotPrefix     = "snapshot_"
+	raftSnapshotMetaFile   = "__raft_snapshot_meta"
+	raftSnapshotPrefix     = "snapshot_"
 	RemoteSnapshotURISchema = "remote://"
 )
 
@@ -91,7 +90,7 @@ type LogManager interface {
 
 	Join()
 
-	AppendEntries(entries []*entity.LogEntry, done lraft.StableClosure)
+	AppendEntries(entries []*entity.LogEntry, done core.StableClosure)
 
 	SetSnapshot(meta core.SnapshotMeta)
 

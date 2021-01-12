@@ -1,14 +1,14 @@
-package lraft
+package github
 
 import (
 	"math"
 	"sync/atomic"
 
-	"lraft/entity"
-	raft "lraft/proto"
-	"lraft/rafterror"
-	"lraft/storage"
-	"lraft/utils"
+	raft "github.com/pole-group/lraft/core"
+	"github.com/pole-group/lraft/entity"
+	"github.com/pole-group/lraft/rafterror"
+	"github.com/pole-group/lraft/storage"
+	"github.com/pole-group/lraft/utils"
 )
 
 const (
@@ -18,7 +18,7 @@ const (
 type IteratorImpl struct {
 	fsm               StateMachine
 	logManager        storage.LogManager
-	closures          []Closure
+	closures          []raft.Closure
 	firstClosureIndex int64
 	currentIndex      int64
 	committedIndex    int64
@@ -103,7 +103,7 @@ func (iti *IteratorImpl) GetIndex() int64 {
 	return iti.currentIndex
 }
 
-func (iti *IteratorImpl) Done() Closure {
+func (iti *IteratorImpl) Done() raft.Closure {
 	if iti.currentIndex < iti.firstClosureIndex {
 		return nil
 	}
@@ -140,7 +140,7 @@ func (iw *IteratorWrapper) GetTerm() int64 {
 	return iw.impl.Entry().LogID.GetTerm()
 }
 
-func (iw *IteratorWrapper) Done() Closure {
+func (iw *IteratorWrapper) Done() raft.Closure {
 	return iw.impl.Done()
 }
 

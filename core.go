@@ -1,4 +1,4 @@
-package lraft
+package github
 
 import (
 	"context"
@@ -8,12 +8,12 @@ import (
 	"time"
 	"unsafe"
 
-	"lraft/entity"
-	"lraft/logger"
-	raft "lraft/proto"
-	"lraft/rafterror"
-	"lraft/storage"
-	"lraft/utils"
+	raft "github.com/pole-group/lraft/core"
+	"github.com/pole-group/lraft/entity"
+	"github.com/pole-group/lraft/logger"
+	"github.com/pole-group/lraft/rafterror"
+	"github.com/pole-group/lraft/storage"
+	"github.com/pole-group/lraft/utils"
 )
 
 type TaskType int
@@ -47,7 +47,7 @@ type ApplyTask struct {
 	Term                int64
 	Status              *entity.Status
 	LeaderChangeContext *entity.LeaderChangeContext
-	Done                Closure
+	Done                raft.Closure
 	Latch               *sync.WaitGroup
 }
 
@@ -62,7 +62,7 @@ func (at *ApplyTask) Reset() {
 }
 
 func (at *ApplyTask) Name() string {
-	return "lraft/ApplyTask"
+	return "github.com/pole-group/lraft/ApplyTask"
 }
 
 func (at *ApplyTask) Sequence() int64 {
@@ -94,9 +94,9 @@ type FSMCaller interface {
 
 	OnCommitted(committedIndex int64) bool
 
-	OnSnapshotLoad(done LoadSnapshotClosure) bool
+	OnSnapshotLoad(done raft.LoadSnapshotClosure) bool
 
-	OnSnapshotSave(done SaveSnapshotClosure) bool
+	OnSnapshotSave(done raft.SaveSnapshotClosure) bool
 
 	OnLeaderStop(status entity.Status) bool
 
@@ -116,10 +116,10 @@ type FSMCaller interface {
 type FSMCallerImpl struct {
 	logManager                   storage.LogManager
 	fsm                          StateMachine
-	closureQueue                 *ClosureQueue
+	closureQueue                 *raft.ClosureQueue
 	lastAppliedIndex             int64
 	lastAppliedTerm              int64
-	afterShutdown                Closure
+	afterShutdown                raft.Closure
 	node                         *NodeImpl
 	currTask                     TaskType
 	applyingIndex                int64
@@ -250,7 +250,7 @@ func (fci *FSMCallerImpl) TestFlush() {
 	latch.Wait()
 }
 
-func (fci *FSMCallerImpl) OnSnapshotLoad(done LoadSnapshotClosure) bool {
+func (fci *FSMCallerImpl) OnSnapshotLoad(done raft.LoadSnapshotClosure) bool {
 	at := fci.applyTaskPool.Get().(*ApplyTask)
 	at.Reset()
 	at.TType = TaskSnapshotLoad
@@ -258,7 +258,7 @@ func (fci *FSMCallerImpl) OnSnapshotLoad(done LoadSnapshotClosure) bool {
 	return fci.enqueueTask(at)
 }
 
-func (fci *FSMCallerImpl) OnSnapshotSave(done SaveSnapshotClosure) bool {
+func (fci *FSMCallerImpl) OnSnapshotSave(done raft.SaveSnapshotClosure) bool {
 	at := fci.applyTaskPool.Get().(*ApplyTask)
 	at.Reset()
 	at.TType = TaskSnapshotSave
@@ -305,7 +305,7 @@ func (fci *FSMCallerImpl) OnError(err rafterror.RaftError) bool {
 		fci.logger.Warn("FSMCaller already in error status, ignore new error: %s", err.Error())
 		return false
 	}
-	closure := &OnErrorClosure{
+	closure := &raft.OnErrorClosure{
 		Err: err,
 	}
 
@@ -355,12 +355,12 @@ func (fci *FSMCallerImpl) runApplyTask(task *ApplyTask, maxCommittedIndex int64,
 		case TaskSnapshotLoad:
 			fci.currTask = TaskSnapshotLoad
 			if fci.passByStatus(task.Done) {
-				fci.doSnapshotLoad(task.Done.(LoadSnapshotClosure))
+				fci.doSnapshotLoad(task.Done.(raft.LoadSnapshotClosure))
 			}
 		case TaskSnapshotSave:
 			fci.currTask = TaskSnapshotSave
 			if fci.passByStatus(task.Done) {
-				fci.doSnapshotSave(task.Done.(SaveSnapshotClosure))
+				fci.doSnapshotSave(task.Done.(raft.SaveSnapshotClosure))
 			}
 		case TaskLeaderStart:
 			fci.currTask = TaskLeaderStart
@@ -378,7 +378,7 @@ func (fci *FSMCallerImpl) runApplyTask(task *ApplyTask, maxCommittedIndex int64,
 			utils.RequireFalse(true, "can be")
 		case TaskError:
 			fci.currTask = TaskError
-			fci.doOnError(task.Done.(*OnErrorClosure))
+			fci.doOnError(task.Done.(*raft.OnErrorClosure))
 		case TaskShutdown:
 			latch = task.Latch
 		case TaskFlush:
@@ -404,8 +404,8 @@ func (fci *FSMCallerImpl) doCommitted(committedIndex int64) {
 		return
 	}
 
-	closures := make([]Closure, 0)
-	taskClosures := make([]TaskClosure, 0)
+	closures := make([]raft.Closure, 0)
+	taskClosures := make([]raft.TaskClosure, 0)
 	firstClosureIndex := fci.closureQueue.PopClosureUntil(committedIndex, closures, taskClosures)
 	fci.onTaskCommitted(taskClosures)
 
@@ -459,13 +459,13 @@ func (fci *FSMCallerImpl) doApplyTask(impl *IteratorImpl) {
 	iw.Next()
 }
 
-func (fci *FSMCallerImpl) onTaskCommitted(closures []TaskClosure) {
+func (fci *FSMCallerImpl) onTaskCommitted(closures []raft.TaskClosure) {
 	for _, closure := range closures {
 		closure.OnCommitted()
 	}
 }
 
-func (fci *FSMCallerImpl) doSnapshotSave(closure SaveSnapshotClosure) {
+func (fci *FSMCallerImpl) doSnapshotSave(closure raft.SaveSnapshotClosure) {
 	utils.RequireNonNil(closure, "SaveSnapshotClosure is nil")
 	lastAppliedIndex := atomic.LoadInt64(&fci.lastAppliedIndex)
 	snapshotMeta := raft.SnapshotMeta{}
@@ -504,7 +504,7 @@ func (fci *FSMCallerImpl) doSnapshotSave(closure SaveSnapshotClosure) {
 	fci.fsm.OnSnapshotSave(writer, closure)
 }
 
-func (fci *FSMCallerImpl) doSnapshotLoad(closure LoadSnapshotClosure) {
+func (fci *FSMCallerImpl) doSnapshotLoad(closure raft.LoadSnapshotClosure) {
 	utils.RequireNonNil(closure, "LoadSnapshotClosure is nil")
 	reader := closure.Start()
 	if reader == nil {
@@ -572,7 +572,7 @@ func (fci *FSMCallerImpl) doStopFollowing(ctx entity.LeaderChangeContext) {
 	fci.fsm.OnStopFollowing(ctx)
 }
 
-func (fci *FSMCallerImpl) doOnError(closure *OnErrorClosure) {
+func (fci *FSMCallerImpl) doOnError(closure *raft.OnErrorClosure) {
 	fci.setError(closure.Err)
 }
 
@@ -584,7 +584,7 @@ func (fci *FSMCallerImpl) notifyLastAppliedIndexUpdated(lastAppliedIndex int64) 
 	}
 }
 
-func (fci *FSMCallerImpl) passByStatus(done Closure) bool {
+func (fci *FSMCallerImpl) passByStatus(done raft.Closure) bool {
 	st := fci.error.Status
 	if !st.IsOK() && done != nil {
 		_st := entity.NewEmptyStatus()
@@ -599,7 +599,7 @@ func (fci *FSMCallerImpl) passByStatus(done Closure) bool {
 
 type BallotBox struct {
 	waiter             FSMCaller
-	closureQueue       *ClosureQueue
+	closureQueue       *raft.ClosureQueue
 	rwMutex            sync.RWMutex
 	lastCommittedIndex int64
 	pendingIndex       int64
@@ -653,7 +653,7 @@ func (bx *BallotBox) RestPendingIndex(newPendingIndex int64) bool {
 	return true
 }
 
-func (bx *BallotBox) AppendPendingTask(conf, oldConf *entity.Configuration, done Closure) bool {
+func (bx *BallotBox) AppendPendingTask(conf, oldConf *entity.Configuration, done raft.Closure) bool {
 	bl := &entity.Ballot{}
 	isOk := bl.Init(conf, oldConf)
 	if !isOk {

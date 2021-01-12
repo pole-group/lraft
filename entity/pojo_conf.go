@@ -3,7 +3,7 @@ package entity
 import (
 	"container/list"
 
-	"lraft/utils"
+	"github.com/pole-group/lraft/utils"
 )
 
 const (

@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"lraft/utils"
+	"github.com/pole-group/lraft/utils"
 )
 
 type ElectionPriority int64

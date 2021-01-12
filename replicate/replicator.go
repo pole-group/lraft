@@ -6,11 +6,11 @@ import (
 	"sync"
 	"time"
 
-	"lraft"
-	"lraft/core"
-	"lraft/entity"
-	"lraft/rpc"
-	"lraft/utils"
+	"github.com/pole-group/lraft"
+	"github.com/pole-group/lraft/core"
+	"github.com/pole-group/lraft/entity"
+	"github.com/pole-group/lraft/rpc"
+	"github.com/pole-group/lraft/utils"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/jjeffcaii/reactor-go/mono"
@@ -71,8 +71,8 @@ type Replicator struct {
 	seqGenerator           int64
 	rpcInFly               *InFlight
 	inFlights              list.List
-	options                lraft.ReplicatorOptions
-	raftOptions            lraft.RaftOptions
+	options                github.com/pole-group/lraft.ReplicatorOptions
+	raftOptions            github.com/pole-group/lraft.RaftOptions
 	ctx                    context.Context
 }
 

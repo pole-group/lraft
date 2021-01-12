@@ -16,7 +16,7 @@ var (
 	publisherCenter       *PublisherCenter
 	publisherOnce         sync.Once
 
-	defaultFastRingBufferSize = GetInt64FromEnvOptional("lraft.notify.fast-event-buffer.size", 16384)
+	defaultFastRingBufferSize = GetInt64FromEnvOptional("github.com/pole-group/lraft.notify.fast-event-buffer.size", 16384)
 )
 
 type PublisherCenter struct {

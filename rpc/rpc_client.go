@@ -2,35 +2,30 @@ package rpc
 
 import (
 	"context"
-	"crypto/tls"
+	"fmt"
 	"sync"
 
-	"github.com/golang/protobuf/proto"
-	"github.com/rsocket/rsocket-go"
-	"github.com/rsocket/rsocket-go/payload"
-	"github.com/rsocket/rsocket-go/rx/mono"
+	"github.com/jjeffcaii/reactor-go/mono"
 
-	"lraft/entity"
-	"lraft/transport"
+	"github.com/pole-group/lraft/entity"
+	"github.com/pole-group/lraft/transport"
 )
 
 type RaftRPCClient struct {
-	lock       sync.RWMutex
-	sockets    map[string]rpcClient
-	dispatcher *transport.Dispatcher
-	openTSL    bool
+	lock    sync.RWMutex
+	sockets map[string]rpcClient
+	openTSL bool
 }
 
 type rpcClient struct {
-	client rsocket.Client
+	client transport.TransportClient
 	ctx    context.Context
 }
 
 func NewRaftRPCClient(openTSL bool) *RaftRPCClient {
 	return &RaftRPCClient{
-		sockets:    make(map[string]rpcClient),
-		dispatcher: transport.NewDispatcher("lRaft"),
-		openTSL:    openTSL,
+		sockets: make(map[string]rpcClient),
+		openTSL: openTSL,
 	}
 }
 
@@ -39,22 +34,9 @@ func (c *RaftRPCClient) computeIfAbsent(endpoint entity.Endpoint) {
 	c.lock.Lock()
 
 	if _, exist := c.sockets[endpoint.GetDesc()]; !exist {
-		start := rsocket.Connect().
-			OnClose(func(err error) {
-
-			}).
-			Acceptor(func(socket rsocket.RSocket) rsocket.RSocket {
-				return rsocket.NewAbstractSocket(c.dispatcher.CreateRequestResponseSocket(), c.dispatcher.CreateRequestChannelSocket())
-			}).
-			Transport("tcp://" + endpoint.GetDesc())
-		var err error
-		var client rsocket.Client
-
-		if c.openTSL {
-			client, err = start.StartTLS(context.Background(), &tls.Config{})
-		} else {
-			client, err = start.Start(context.Background())
-		}
+		client, err := transport.NewTransportClient(transport.ConnectTypeRSocket, fmt.Sprintf("%s:%d",
+			endpoint.GetIP(),
+			endpoint.GetPort()), c.openTSL)
 
 		if err != nil {
 			panic(err)
@@ -66,14 +48,10 @@ func (c *RaftRPCClient) computeIfAbsent(endpoint entity.Endpoint) {
 	}
 }
 
-func (c *RaftRPCClient) SendRequest(endpoint entity.Endpoint, req *transport.GrpcRequest) mono.Mono {
+func (c *RaftRPCClient) SendRequest(endpoint entity.Endpoint, req *transport.GrpcRequest) (mono.Mono, error) {
 	c.computeIfAbsent(endpoint)
 	if rpcC, exist := c.sockets[endpoint.GetDesc()]; exist {
-		body, err := proto.Marshal(req)
-		if err != nil {
-			return mono.Error(err)
-		}
-		return rpcC.client.RequestResponse(payload.New(body, EmptyBytes))
+		return rpcC.client.Request(req)
 	}
-	return mono.Error(ServerNotFount)
+	return nil, ServerNotFount
 }

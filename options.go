@@ -1,10 +1,11 @@
-package lraft
+package github
 
 import (
 	"runtime"
 
-	"lraft/entity"
-	"lraft/storage"
+	"github.com/pole-group/lraft/core"
+	"github.com/pole-group/lraft/entity"
+	"github.com/pole-group/lraft/storage"
 )
 
 type NodeOptions struct {
@@ -69,14 +70,14 @@ func (ro ReplicatorOptions) GetDynamicHeartBeatTimeoutMs() int32 {
 
 type BallotBoxOptions struct {
 	Waiter       FSMCaller
-	ClosureQueue *ClosureQueue
+	ClosureQueue *core.ClosureQueue
 }
 
 type FSMCallerOptions struct {
 	LogManager    storage.LogManager
 	FSM           StateMachine
-	AfterShutdown Closure
+	AfterShutdown core.Closure
 	BootstrapID   *entity.LogId
-	ClosureQueue  *ClosureQueue
+	ClosureQueue  *core.ClosureQueue
 	Node          *NodeImpl
 }

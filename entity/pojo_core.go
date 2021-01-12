@@ -7,8 +7,8 @@ import (
 
 	"github.com/golang/protobuf/proto"
 
-	"lraft/core"
-	"lraft/utils"
+	"github.com/pole-group/lraft/core"
+	"github.com/pole-group/lraft/utils"
 )
 
 type Status struct {

@@ -1,9 +1,10 @@
-package lraft
+package github
 
 import (
-	"lraft/entity"
-	"lraft/rafterror"
-	"lraft/storage"
+	"github.com/pole-group/lraft/core"
+	"github.com/pole-group/lraft/entity"
+	"github.com/pole-group/lraft/rafterror"
+	"github.com/pole-group/lraft/storage"
 )
 
 type Iterator interface {
@@ -13,7 +14,7 @@ type Iterator interface {
 
 	GetTerm() int64
 
-	Done() Closure
+	Done() core.Closure
 
 	SetErrorAndRollback(nTail int64, st entity.Status)
 }
@@ -23,7 +24,7 @@ type StateMachine interface {
 
 	OnShutdown()
 
-	OnSnapshotSave(writer storage.SnapshotWriter, done Closure)
+	OnSnapshotSave(writer storage.SnapshotWriter, done core.Closure)
 
 	OnSnapshotLoad(reader storage.SnapshotReader) bool
 

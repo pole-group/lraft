@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"lraft/utils"
+	"github.com/pole-group/lraft/utils"
 )
 
 const LogPrefix = "%s-%s : "
@@ -49,7 +49,7 @@ type Logger interface {
 	Sink() LogSink
 }
 
-type lRaftLogger struct {
+type raftLogger struct {
 	name     string
 	sink     LogSink
 	debugBuf chan LogEvent
@@ -74,10 +74,10 @@ func LogInit(baseDir string) {
 	filePath = baseDir
 }
 
-func NewLRaftLogger(name string) Logger {
+func NewRaftLogger(name string) Logger {
 	f, err := os.OpenFile(filepath.Join(filePath, name+".log"), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0666)
 	utils.CheckErr(err)
-	l := &lRaftLogger{
+	l := &raftLogger{
 		name: name,
 		sink: &FileLogSink{
 			logger: log.New(f, "", log.Lmsgprefix),
@@ -94,8 +94,8 @@ func NewLRaftLogger(name string) Logger {
 	return l
 }
 
-func NewLRaftLoggerWithSink(name string, sink LogSink) Logger {
-	l := &lRaftLogger{
+func NewRaftLoggerWithSink(name string, sink LogSink) Logger {
+	l := &raftLogger{
 		name:     name,
 		sink:     sink,
 		debugBuf: make(chan LogEvent, 1024),
@@ -110,7 +110,7 @@ func NewLRaftLoggerWithSink(name string, sink LogSink) Logger {
 	return l
 }
 
-func (l *lRaftLogger) Debug(format string, args ...interface{}) {
+func (l *raftLogger) Debug(format string, args ...interface{}) {
 	if atomic.LoadInt32(&l.isClose) == 1 {
 		return
 	}
@@ -121,7 +121,7 @@ func (l *lRaftLogger) Debug(format string, args ...interface{}) {
 	}
 }
 
-func (l *lRaftLogger) Info(format string, args ...interface{}) {
+func (l *raftLogger) Info(format string, args ...interface{}) {
 	if atomic.LoadInt32(&l.isClose) == 1 {
 		return
 	}
@@ -132,7 +132,7 @@ func (l *lRaftLogger) Info(format string, args ...interface{}) {
 	}
 }
 
-func (l *lRaftLogger) Warn(format string, args ...interface{}) {
+func (l *raftLogger) Warn(format string, args ...interface{}) {
 	if atomic.LoadInt32(&l.isClose) == 1 {
 		return
 	}
@@ -143,7 +143,7 @@ func (l *lRaftLogger) Warn(format string, args ...interface{}) {
 	}
 }
 
-func (l *lRaftLogger) Error(format string, args ...interface{}) {
+func (l *raftLogger) Error(format string, args ...interface{}) {
 	if atomic.LoadInt32(&l.isClose) == 1 {
 		return
 	}
@@ -154,7 +154,7 @@ func (l *lRaftLogger) Error(format string, args ...interface{}) {
 	}
 }
 
-func (l *lRaftLogger) Trace(format string, args ...interface{}) {
+func (l *raftLogger) Trace(format string, args ...interface{}) {
 	if atomic.LoadInt32(&l.isClose) == 1 {
 		return
 	}
@@ -165,7 +165,7 @@ func (l *lRaftLogger) Trace(format string, args ...interface{}) {
 	}
 }
 
-func (l *lRaftLogger) Close() {
+func (l *raftLogger) Close() {
 	atomic.StoreInt32(&l.isClose, 1)
 	l.ctx.Done()
 	close(l.debugBuf)
@@ -175,11 +175,11 @@ func (l *lRaftLogger) Close() {
 	close(l.traceBuf)
 }
 
-func (l *lRaftLogger) Sink() LogSink {
+func (l *raftLogger) Sink() LogSink {
 	return l.sink
 }
 
-func (l *lRaftLogger) start() {
+func (l *raftLogger) start() {
 	utils.NewGoroutine(l.ctx, func(ctx context.Context) {
 		for {
 			var e LogEvent

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"lraft/utils"
+	"github.com/pole-group/lraft/utils"
 )
 
 type TestFileSink struct {
@@ -34,7 +34,7 @@ func (fl *TestFileSink) OnEvent(name string, level LogLevel, format string, args
 	fl.observer()
 }
 
-func TestLRaftLogger_Info(t *testing.T) {
+func Test_RaftLogger_Info(t *testing.T) {
 	latch := &sync.WaitGroup{}
 	latch.Add(1)
 
@@ -43,7 +43,7 @@ func TestLRaftLogger_Info(t *testing.T) {
 		latch.Done()
 	}
 
-	logger := NewLRaftLoggerWithSink("lessspring_test", sink)
+	logger := NewRaftLoggerWithSink("lessspring_test", sink)
 	logger.Info("this is test %s", time.Now().Format(TimeFormatStr))
 
 	f, err := os.Open(filepath.Join(filePath, "lessspring_test.log"))

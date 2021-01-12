@@ -1,29 +1,28 @@
-package lraft
+package github
 
 import (
-	"errors"
 	"sync"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/ptypes"
+	"github.com/jjeffcaii/reactor-go/mono"
 	"github.com/rsocket/rsocket-go/payload"
 	"github.com/rsocket/rsocket-go/rx/flux"
-	"github.com/rsocket/rsocket-go/rx/mono"
 
-	"lraft/core"
-	"lraft/entity"
-	"lraft/logger"
-	"lraft/rafterror"
-	"lraft/replicate"
-	"lraft/rpc"
-	"lraft/storage"
-	"lraft/transport"
-	"lraft/utils"
+	"github.com/pole-group/lraft/core"
+	"github.com/pole-group/lraft/entity"
+	"github.com/pole-group/lraft/logger"
+	"github.com/pole-group/lraft/rafterror"
+	"github.com/pole-group/lraft/replicate"
+	"github.com/pole-group/lraft/rpc"
+	"github.com/pole-group/lraft/storage"
+	"github.com/pole-group/lraft/transport"
+	"github.com/pole-group/lraft/utils"
 )
 
 type LogEntryAndClosure struct {
 	Entry        *entity.LogEntry
-	Done         Closure
+	Done         core.Closure
 	ExpectedTerm int64
 	Latch        *sync.WaitGroup
 }
@@ -36,7 +35,7 @@ func (lac *LogEntryAndClosure) Reset() {
 }
 
 func (lac *LogEntryAndClosure) Name() string {
-	return "lraft/LogEntryAndClosure"
+	return "github.com/pole-group/lraft/LogEntryAndClosure"
 }
 
 func (lac *LogEntryAndClosure) Sequence() int64 {
@@ -63,7 +62,7 @@ type ConfigurationCtx struct {
 
 	learners    []*entity.PeerId
 	oldLearners []*entity.PeerId
-	done        Closure
+	done        core.Closure
 }
 
 func NewConfigurationCtx(node *NodeImpl) *ConfigurationCtx {
@@ -74,7 +73,7 @@ func NewConfigurationCtx(node *NodeImpl) *ConfigurationCtx {
 	}
 }
 
-func (cc *ConfigurationCtx) Start(conf, oldConf *entity.Configuration, done Closure) {
+func (cc *ConfigurationCtx) Start(conf, oldConf *entity.Configuration, done core.Closure) {
 
 }
 
@@ -95,13 +94,13 @@ type Node interface {
 
 	IsLeader() bool
 
-	Shutdown(done Closure)
+	Shutdown(done core.Closure)
 
 	Join()
 
 	Apply(task *entity.Task)
 
-	ReadIndex(reqCtx []byte, done *ReadIndexClosure)
+	ReadIndex(reqCtx []byte, done *core.ReadIndexClosure)
 
 	ListPeers() []*entity.PeerId
 
@@ -111,21 +110,21 @@ type Node interface {
 
 	ListAliceLearners() []*entity.PeerId
 
-	AddPeer(peer *entity.PeerId, done Closure)
+	AddPeer(peer *entity.PeerId, done core.Closure)
 
-	RemovePeer(peer *entity.PeerId, done Closure)
+	RemovePeer(peer *entity.PeerId, done core.Closure)
 
-	ChangePeers(newConf *entity.Configuration, done Closure)
+	ChangePeers(newConf *entity.Configuration, done core.Closure)
 
 	ResetPeers(newConf *entity.Configuration) entity.Status
 
-	AddLearners(learners []*entity.PeerId, done Closure)
+	AddLearners(learners []*entity.PeerId, done core.Closure)
 
-	RemoveLearners(learners []*entity.PeerId, done Closure)
+	RemoveLearners(learners []*entity.PeerId, done core.Closure)
 
-	ResetLearners(learners []*entity.PeerId, done Closure)
+	ResetLearners(learners []*entity.PeerId, done core.Closure)
 
-	Snapshot(done Closure)
+	Snapshot(done core.Closure)
 
 	ResetElectionTimeoutMs(electionTimeoutMs int32)
 
@@ -227,7 +226,7 @@ func (ni *NodeImpl) IsLeader() bool {
 
 }
 
-func (ni *NodeImpl) Shutdown(done Closure) {
+func (ni *NodeImpl) Shutdown(done core.Closure) {
 
 }
 
@@ -239,7 +238,7 @@ func (ni *NodeImpl) Apply(task *entity.Task) {
 
 }
 
-func (ni *NodeImpl) ReadIndex(reqCtx []byte, done *ReadIndexClosure) {
+func (ni *NodeImpl) ReadIndex(reqCtx []byte, done *core.ReadIndexClosure) {
 
 }
 
@@ -259,15 +258,15 @@ func (ni *NodeImpl) ListAliceLearners() []*entity.PeerId {
 
 }
 
-func (ni *NodeImpl) AddPeer(peer *entity.PeerId, done Closure) {
+func (ni *NodeImpl) AddPeer(peer *entity.PeerId, done core.Closure) {
 
 }
 
-func (ni *NodeImpl) RemovePeer(peer *entity.PeerId, done Closure) {
+func (ni *NodeImpl) RemovePeer(peer *entity.PeerId, done core.Closure) {
 
 }
 
-func (ni *NodeImpl) ChangePeers(newConf *entity.Configuration, done Closure) {
+func (ni *NodeImpl) ChangePeers(newConf *entity.Configuration, done core.Closure) {
 
 }
 
@@ -275,19 +274,19 @@ func (ni *NodeImpl) ResetPeers(newConf *entity.Configuration) entity.Status {
 
 }
 
-func (ni *NodeImpl) AddLearners(learners []*entity.PeerId, done Closure) {
+func (ni *NodeImpl) AddLearners(learners []*entity.PeerId, done core.Closure) {
 
 }
 
-func (ni *NodeImpl) RemoveLearners(learners []*entity.PeerId, done Closure) {
+func (ni *NodeImpl) RemoveLearners(learners []*entity.PeerId, done core.Closure) {
 
 }
 
-func (ni *NodeImpl) ResetLearners(learners []*entity.PeerId, done Closure) {
+func (ni *NodeImpl) ResetLearners(learners []*entity.PeerId, done core.Closure) {
 
 }
 
-func (ni *NodeImpl) Snapshot(done Closure) {
+func (ni *NodeImpl) Snapshot(done core.Closure) {
 
 }
 
@@ -332,7 +331,7 @@ func (ni *NodeImpl) IsCurrentLeaderValid() bool {
 }
 
 type LeaderStableClosure struct {
-	StableClosure
+	core.StableClosure
 	node *NodeImpl
 }
 
@@ -346,9 +345,9 @@ func (lsc *LeaderStableClosure) Run(status entity.Status) {
 }
 
 type readIndexHeartbeatResponseClosure struct {
-	RpcResponseClosure
+	core.RpcResponseClosure
 	readIndexResp		*core.ReadIndexResponse
-	closure            *RpcResponseClosure
+	closure            *core.RpcResponseClosure
 	quorum             int32
 	failPeersThreshold int32
 	ackSuccess         int32

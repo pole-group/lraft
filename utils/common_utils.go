@@ -10,7 +10,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-func AddressAnalyze(address string) (ip string, port int) {
+func AnalyzeIPAndPort(address string) (ip string, port int) {
 	s := strings.Split(address, ":")
 	port, err := strconv.Atoi(s[1])
 	CheckErr(err)

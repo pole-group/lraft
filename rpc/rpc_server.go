@@ -8,13 +8,13 @@ import (
 	"github.com/rsocket/rsocket-go"
 	"github.com/rsocket/rsocket-go/payload"
 
-	"lraft/transport"
-	"lraft/utils"
+	"github.com/pole-group/lraft/transport"
+	"github.com/pole-group/lraft/utils"
 )
 
 type RaftRPCServer struct {
 	IsReady    chan struct{}
-	Dispatcher *transport.Dispatcher
+	Dispatcher *transport.dispatcher
 	Ctx        context.Context
 }
 

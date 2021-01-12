@@ -1,8 +1,8 @@
 package core
 
 import (
-	"lraft/entity"
-	"lraft/utils"
+	"github.com/pole-group/lraft/entity"
+	"github.com/pole-group/lraft/utils"
 )
 
 func NewErrorResponse(code entity.RaftErrorCode, format string, args ...interface{}) *ErrorResponse {

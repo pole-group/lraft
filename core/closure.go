@@ -1,4 +1,4 @@
-package lraft
+package core
 
 import (
 	"container/list"
@@ -9,11 +9,10 @@ import (
 
 	"github.com/golang/protobuf/proto"
 
-	"lraft/core"
-	"lraft/entity"
-	"lraft/rafterror"
-	"lraft/storage"
-	"lraft/utils"
+	"github.com/pole-group/lraft/entity"
+	"github.com/pole-group/lraft/rafterror"
+	"github.com/pole-group/lraft/storage"
+	"github.com/pole-group/lraft/utils"
 )
 
 type Closure interface {
@@ -156,7 +155,7 @@ type LoadSnapshotClosure interface {
 type SaveSnapshotClosure interface {
 	Closure
 
-	Start(meta *core.SnapshotMeta) storage.SnapshotWriter
+	Start(meta *SnapshotMeta) storage.SnapshotWriter
 }
 
 const (

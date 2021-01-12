@@ -3,16 +3,13 @@ package transport
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
-	"lraft/logger"
-
 	"github.com/golang/protobuf/proto"
-	"github.com/golang/protobuf/ptypes"
 	"github.com/jjeffcaii/reactor-go/scheduler"
 	"github.com/rsocket/rsocket-go"
 	"github.com/rsocket/rsocket-go/payload"
-	"github.com/rsocket/rsocket-go/rx"
 	"github.com/rsocket/rsocket-go/rx/flux"
 	"github.com/rsocket/rsocket-go/rx/mono"
 )
@@ -21,159 +18,111 @@ var (
 	ErrorNotImplement = errors.New("not implement")
 )
 
+type reqRespHandler struct {
+	handler ServerHandler
+}
+
+type reqChannelHandler struct {
+	supplier func() proto.Message
+	handler  ServerHandler
+}
+
 type Dispatcher struct {
-	Label   string
-	lock    sync.Mutex
-	filters []func(req RSocketRequest) error
-	logger  logger.Logger
-
-	reqRespHandler map[string]struct {
-		supplier func() proto.Message
-		handler  func(payload payload.Payload, req proto.Message, sink mono.Sink)
-	}
-	reqChannelHandler map[string]struct {
-		supplier func() proto.Message
-		handler  func(payload payload.Payload, req proto.Message, sink flux.Sink)
-	}
+	Label             string
+	lock              sync.Mutex
+	reqRespHandler    map[string]reqRespHandler
+	reqChannelHandler map[string]reqChannelHandler
 }
 
-func NewDispatcher(label string) *Dispatcher {
+func newDispatcher(label string) *Dispatcher {
 	return &Dispatcher{
-		Label: label,
-		reqRespHandler: make(map[string]struct {
-			supplier func() proto.Message
-			handler  func(payload payload.Payload, req proto.Message, sink mono.Sink)
-		}),
-		reqChannelHandler: make(map[string]struct {
-			supplier func() proto.Message
-			handler  func(payload payload.Payload, req proto.Message, sink flux.Sink)
-		}),
+		Label:             label,
+		reqRespHandler:    make(map[string]reqRespHandler),
+		reqChannelHandler: make(map[string]reqChannelHandler),
 	}
 }
 
-type RSocketRequest struct {
-	Msg payload.Payload
-	Req *GrpcRequest
-}
-
-func (r *Dispatcher) SetLogger(logger logger.Logger) {
-	r.logger = logger
-}
-
-func (r *Dispatcher) RegisterFilter(chain ...func(req RSocketRequest) error) {
-	r.filters = append(r.filters, chain...)
-}
-
-func (r *Dispatcher) CreateRequestResponseSocket() rsocket.OptAbstractSocket {
+func (r *Dispatcher) createRequestResponseSocket() rsocket.OptAbstractSocket {
 	return rsocket.RequestResponse(func(msg payload.Payload) mono.Mono {
 		body := msg.Data()
-		gRPCRep := &GrpcRequest{}
-		err := proto.Unmarshal(body, gRPCRep)
+		req := &GrpcRequest{}
+		err := proto.Unmarshal(body, req)
 		if err != nil {
 			return mono.Error(err)
 		}
 
-		if wrap, ok := r.reqRespHandler[gRPCRep.GetLabel()]; ok {
-			req := RSocketRequest{
-				Msg: msg,
-				Req: gRPCRep,
-			}
-
-			for _, filter := range r.filters {
-				if err := filter(req); err != nil {
-					return mono.Error(err)
-				}
-			}
-
+		if wrap, ok := r.reqRespHandler[req.GetLabel()]; ok {
 			return mono.Create(func(ctx context.Context, sink mono.Sink) {
-				any := gRPCRep.GetBody()
-				pb := wrap.supplier()
+				result := wrap.handler(context.Background(), req)
 
-				err := ptypes.UnmarshalAny(any, pb)
+				bs, err := proto.Marshal(result)
 
 				if err != nil {
 					sink.Error(err)
 				} else {
-					wrap.handler(msg, pb, sink)
+					sink.Success(payload.New(bs, []byte{}))
 				}
 			}).DoOnError(func(e error) {
-				r.logger.Error("an exception occurred while processing the request %s", e)
+				fmt.Printf("an exception occurred while processing the request %s\n", err)
 			})
 		}
 		return mono.Error(ErrorNotImplement)
 	})
 }
 
-func (r *Dispatcher) CreateRequestChannelSocket() rsocket.OptAbstractSocket {
-	return rsocket.RequestChannel(func(msgs rx.Publisher) flux.Flux {
+func (r *Dispatcher) createRequestChannelSocket() rsocket.OptAbstractSocket {
+	return rsocket.RequestChannel(func(requests flux.Flux) (responses flux.Flux) {
 		return flux.Create(func(ctx context.Context, sink flux.Sink) {
-			msgs.(flux.Flux).SubscribeOn(scheduler.Elastic()).
-				DoOnNext(func(input payload.Payload) {
-					body := input.Data()
-					gRPCRep := &GrpcRequest{}
-					err := proto.Unmarshal(body, gRPCRep)
+			requests.SubscribeOn(scheduler.Elastic()).
+				DoOnNext(func(input payload.Payload) error {
+					req := &GrpcRequest{}
+					err := proto.Unmarshal(input.Data(), req)
 					if err != nil {
-						panic(err)
+						sink.Error(err)
 					}
-					if wrap, ok := r.reqChannelHandler[gRPCRep.GetLabel()]; ok {
-						req := RSocketRequest{
-							Msg: input,
-							Req: gRPCRep,
-						}
+					if wrap, ok := r.reqChannelHandler[req.GetLabel()]; ok {
+						resp := wrap.handler(context.Background(), req)
 
-						hasError := false
-						for _, filter := range r.filters {
-							e := filter(req)
-							if e != nil {
-								hasError = true
-								sink.Error(e)
-								break
-							}
+						bs, err := proto.Marshal(resp)
+
+						if err != nil {
+							sink.Error(err)
+						} else {
+							sink.Next(payload.New(bs, []byte{}))
 						}
-						if !hasError {
-							wrap.handler(input, gRPCRep.GetBody(), sink)
-						}
+						return nil
 					} else {
-						sink.Error(ErrorNotImplement)
+						return ErrorNotImplement
 					}
 				}).
 				DoOnError(func(e error) {
-					r.logger.Error("an exception occurred while processing the request %s", e)
+					fmt.Printf("an exception occurred while processing the request %s\n", e)
 				}).
-				Subscribe(context.Background())
+				Subscribe(ctx)
 		})
 	})
 }
 
-func (r *Dispatcher) RegisterRequestResponseHandler(key string, supplier func() proto.Message,
-	handler func(input payload.Payload, req proto.Message, sink mono.Sink)) {
-	defer func() {
-		r.lock.Unlock()
-		if err := recover(); err != nil {
-			r.logger.Error("register rep&resp handler has error %s", err)
-		}
-	}()
+func (r *Dispatcher) registerRequestResponseHandler(key string, handler ServerHandler) {
+	defer r.lock.Unlock()
 	r.lock.Lock()
 
 	if _, ok := r.reqRespHandler[key]; ok {
 		return
 	}
-	r.reqRespHandler[key] = struct {
-		supplier func() proto.Message
-		handler  func(payload payload.Payload, req proto.Message, sink mono.Sink)
-	}{supplier: supplier, handler: handler}
+	r.reqRespHandler[key] = reqRespHandler{
+		handler: handler,
+	}
 }
 
-func (r *Dispatcher) RegisterRequestChannelHandler(key string, supplier func() proto.Message,
-	handler func(input payload.Payload, req proto.Message, sink flux.Sink)) {
+func (r *Dispatcher) registerRequestChannelHandler(key string, handler ServerHandler) {
 	defer r.lock.Unlock()
 	r.lock.Lock()
 
 	if _, ok := r.reqChannelHandler[key]; ok {
 		return
 	}
-	r.reqChannelHandler[key] = struct {
-		supplier func() proto.Message
-		handler  func(payload payload.Payload, req proto.Message, sink flux.Sink)
-	}{supplier: supplier, handler: handler}
+	r.reqChannelHandler[key] = reqChannelHandler{
+		handler: handler,
+	}
 }
