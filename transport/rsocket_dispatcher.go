@@ -54,9 +54,7 @@ func (r *Dispatcher) createRequestResponseSocket() rsocket.OptAbstractSocket {
 		if wrap, ok := r.reqRespHandler[req.GetLabel()]; ok {
 			return mono.Create(func(ctx context.Context, sink mono.Sink) {
 				result := wrap.handler(context.Background(), req)
-
 				bs, err := proto.Marshal(result)
-
 				if err != nil {
 					sink.Error(err)
 				} else {
@@ -82,9 +80,7 @@ func (r *Dispatcher) createRequestChannelSocket() rsocket.OptAbstractSocket {
 					}
 					if wrap, ok := r.reqChannelHandler[req.GetLabel()]; ok {
 						resp := wrap.handler(context.Background(), req)
-
 						bs, err := proto.Marshal(resp)
-
 						if err != nil {
 							sink.Error(err)
 						} else {

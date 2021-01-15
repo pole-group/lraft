@@ -1,4 +1,4 @@
-package replicate
+package core
 
 import (
 	"container/list"
@@ -6,9 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pole-group/lraft"
-	"github.com/pole-group/lraft/core"
 	"github.com/pole-group/lraft/entity"
+	raft "github.com/pole-group/lraft/proto"
 	"github.com/pole-group/lraft/rpc"
 	"github.com/pole-group/lraft/utils"
 
@@ -58,7 +57,7 @@ type Stat struct {
 
 type Replicator struct {
 	lock                   sync.Cond
-	rpcClient              *rpc.RaftRPCClient
+	rpcClient              *rpc.RpcClient
 	nextIndex              int64
 	hasSucceeded           bool
 	consecutiveErrorTimes  int64
@@ -71,8 +70,8 @@ type Replicator struct {
 	seqGenerator           int64
 	rpcInFly               *InFlight
 	inFlights              list.List
-	options                github.com/pole-group/lraft.ReplicatorOptions
-	raftOptions            github.com/pole-group/lraft.RaftOptions
+	options                ReplicatorOptions
+	raftOptions            RaftOptions
 	ctx                    context.Context
 }
 
@@ -149,12 +148,12 @@ func (r *Replicator) startHeartbeat(startMs int64) {
 	}, time.Duration(dueTime)*time.Millisecond)
 }
 
-func (r *Replicator) OnVoteReqReturn(resp *core.RequestVoteResponse) {
+func (r *Replicator) OnVoteReqReturn(resp *raft.RequestVoteResponse) {
 }
 
-func (r *Replicator) OnHeartbeatReqReturn(resp *core.AppendEntriesResponse) {
+func (r *Replicator) OnHeartbeatReqReturn(resp *raft.AppendEntriesResponse) {
 }
 
-func (r *Replicator) OnInstallSnapshotReqReturn(resp *core.InstallSnapshotResponse) {
+func (r *Replicator) OnInstallSnapshotReqReturn(resp *raft.InstallSnapshotResponse) {
 
 }

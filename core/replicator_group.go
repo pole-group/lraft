@@ -1,4 +1,4 @@
-package replicate
+package core
 
 import "sync"
 

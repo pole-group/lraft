@@ -8,7 +8,7 @@
 // 	protoc        v3.12.3
 // source: cli.proto
 
-package core
+package proto
 
 import (
 	proto "github.com/golang/protobuf/proto"
@@ -1224,32 +1224,32 @@ func file_cli_proto_rawDescGZIP() []byte {
 
 var file_cli_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_cli_proto_goTypes = []interface{}{
-	(*AddPeerRequest)(nil),        // 0: core.AddPeerRequest
-	(*AddPeerResponse)(nil),       // 1: core.AddPeerResponse
-	(*RemovePeerRequest)(nil),     // 2: core.RemovePeerRequest
-	(*RemovePeerResponse)(nil),    // 3: core.RemovePeerResponse
-	(*ChangePeersRequest)(nil),    // 4: core.ChangePeersRequest
-	(*ChangePeersResponse)(nil),   // 5: core.ChangePeersResponse
-	(*SnapshotRequest)(nil),       // 6: core.SnapshotRequest
-	(*ResetPeerRequest)(nil),      // 7: core.ResetPeerRequest
-	(*TransferLeaderRequest)(nil), // 8: core.TransferLeaderRequest
-	(*GetLeaderRequest)(nil),      // 9: core.GetLeaderRequest
-	(*GetLeaderResponse)(nil),     // 10: core.GetLeaderResponse
-	(*GetPeersRequest)(nil),       // 11: core.GetPeersRequest
-	(*GetPeersResponse)(nil),      // 12: core.GetPeersResponse
-	(*AddLearnersRequest)(nil),    // 13: core.AddLearnersRequest
-	(*RemoveLearnersRequest)(nil), // 14: core.RemoveLearnersRequest
-	(*ResetLearnersRequest)(nil),  // 15: core.ResetLearnersRequest
-	(*LearnersOpResponse)(nil),    // 16: core.LearnersOpResponse
-	(*ErrorResponse)(nil),         // 17: core.ErrorResponse
+	(*AddPeerRequest)(nil),        // 0: proto.AddPeerRequest
+	(*AddPeerResponse)(nil),       // 1: proto.AddPeerResponse
+	(*RemovePeerRequest)(nil),     // 2: proto.RemovePeerRequest
+	(*RemovePeerResponse)(nil),    // 3: proto.RemovePeerResponse
+	(*ChangePeersRequest)(nil),    // 4: proto.ChangePeersRequest
+	(*ChangePeersResponse)(nil),   // 5: proto.ChangePeersResponse
+	(*SnapshotRequest)(nil),       // 6: proto.SnapshotRequest
+	(*ResetPeerRequest)(nil),      // 7: proto.ResetPeerRequest
+	(*TransferLeaderRequest)(nil), // 8: proto.TransferLeaderRequest
+	(*GetLeaderRequest)(nil),      // 9: proto.GetLeaderRequest
+	(*GetLeaderResponse)(nil),     // 10: proto.GetLeaderResponse
+	(*GetPeersRequest)(nil),       // 11: proto.GetPeersRequest
+	(*GetPeersResponse)(nil),      // 12: proto.GetPeersResponse
+	(*AddLearnersRequest)(nil),    // 13: proto.AddLearnersRequest
+	(*RemoveLearnersRequest)(nil), // 14: proto.RemoveLearnersRequest
+	(*ResetLearnersRequest)(nil),  // 15: proto.ResetLearnersRequest
+	(*LearnersOpResponse)(nil),    // 16: proto.LearnersOpResponse
+	(*ErrorResponse)(nil),         // 17: proto.ErrorResponse
 }
 var file_cli_proto_depIdxs = []int32{
-	17, // 0: core.AddPeerResponse.errorResponse:type_name -> core.ErrorResponse
-	17, // 1: core.RemovePeerResponse.errorResponse:type_name -> core.ErrorResponse
-	17, // 2: core.ChangePeersResponse.errorResponse:type_name -> core.ErrorResponse
-	17, // 3: core.GetLeaderResponse.errorResponse:type_name -> core.ErrorResponse
-	17, // 4: core.GetPeersResponse.errorResponse:type_name -> core.ErrorResponse
-	17, // 5: core.LearnersOpResponse.errorResponse:type_name -> core.ErrorResponse
+	17, // 0: proto.AddPeerResponse.errorResponse:type_name -> proto.ErrorResponse
+	17, // 1: proto.RemovePeerResponse.errorResponse:type_name -> proto.ErrorResponse
+	17, // 2: proto.ChangePeersResponse.errorResponse:type_name -> proto.ErrorResponse
+	17, // 3: proto.GetLeaderResponse.errorResponse:type_name -> proto.ErrorResponse
+	17, // 4: proto.GetPeersResponse.errorResponse:type_name -> proto.ErrorResponse
+	17, // 5: proto.LearnersOpResponse.errorResponse:type_name -> proto.ErrorResponse
 	6,  // [6:6] is the sub-list for method output_type
 	6,  // [6:6] is the sub-list for method input_type
 	6,  // [6:6] is the sub-list for extension type_name

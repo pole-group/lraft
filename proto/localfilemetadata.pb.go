@@ -8,7 +8,7 @@
 // 	protoc        v3.12.3
 // source: localfilemetadata.proto
 
-package core
+package proto
 
 import (
 	proto "github.com/golang/protobuf/proto"
@@ -81,7 +81,7 @@ type LocalFileMeta struct {
 	unknownFields protoimpl.UnknownFields
 
 	UserMeta []byte     `protobuf:"bytes,1,opt,name=userMeta,proto3" json:"userMeta,omitempty"`
-	Source   FileSource `protobuf:"varint,2,opt,name=source,proto3,enum=core.FileSource" json:"source,omitempty"`
+	Source   FileSource `protobuf:"varint,2,opt,name=source,proto3,enum=proto.FileSource" json:"source,omitempty"`
 	Checksum string     `protobuf:"bytes,3,opt,name=checksum,proto3" json:"checksum,omitempty"`
 }
 
@@ -172,11 +172,11 @@ func file_localfilemetadata_proto_rawDescGZIP() []byte {
 var file_localfilemetadata_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_localfilemetadata_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_localfilemetadata_proto_goTypes = []interface{}{
-	(FileSource)(0),       // 0: core.FileSource
-	(*LocalFileMeta)(nil), // 1: core.LocalFileMeta
+	(FileSource)(0),       // 0: proto.FileSource
+	(*LocalFileMeta)(nil), // 1: proto.LocalFileMeta
 }
 var file_localfilemetadata_proto_depIdxs = []int32{
-	0, // 0: core.LocalFileMeta.source:type_name -> core.FileSource
+	0, // 0: proto.LocalFileMeta.source:type_name -> proto.FileSource
 	1, // [1:1] is the sub-list for method output_type
 	1, // [1:1] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name

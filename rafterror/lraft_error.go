@@ -1,8 +1,8 @@
 package rafterror
 
 import (
-	"github.com/pole-group/lraft/entity"
 	raft "github.com/pole-group/lraft/proto"
+	"github.com/pole-group/lraft/entity"
 )
 
 type RaftError struct {

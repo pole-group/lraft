@@ -2,16 +2,18 @@ package logger
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"time"
 
 	"github.com/pole-group/lraft/utils"
 )
 
-const LogPrefix = "%s-%s : "
+const LogPrefix = "%s-%s-%s : "
 
 type LogLevel int
 
@@ -74,6 +76,22 @@ func LogInit(baseDir string) {
 	filePath = baseDir
 }
 
+func NewTestRaftLogger(name string) Logger {
+	l := &raftLogger{
+		name: name,
+		sink: &ConsoleLogSink{},
+		debugBuf: make(chan LogEvent, 1024),
+		infoBuf:  make(chan LogEvent, 1024),
+		warnBuf:  make(chan LogEvent, 1024),
+		errorBuf: make(chan LogEvent, 1024),
+		traceBuf: make(chan LogEvent, 1024),
+		ctx:      context.Background(),
+	}
+
+	l.start()
+	return l
+}
+
 func NewRaftLogger(name string) Logger {
 	f, err := os.OpenFile(filepath.Join(filePath, name+".log"), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0666)
 	utils.CheckErr(err)
@@ -117,7 +135,7 @@ func (l *raftLogger) Debug(format string, args ...interface{}) {
 	l.debugBuf <- LogEvent{
 		Level:  Debug,
 		Format: format,
-		Args:   args,
+		Args:   convertToLogArgs(args),
 	}
 }
 
@@ -128,7 +146,7 @@ func (l *raftLogger) Info(format string, args ...interface{}) {
 	l.infoBuf <- LogEvent{
 		Level:  Info,
 		Format: format,
-		Args:   args,
+		Args:   convertToLogArgs(args),
 	}
 }
 
@@ -139,7 +157,7 @@ func (l *raftLogger) Warn(format string, args ...interface{}) {
 	l.warnBuf <- LogEvent{
 		Level:  Warn,
 		Format: format,
-		Args:   args,
+		Args:   convertToLogArgs(args),
 	}
 }
 
@@ -150,7 +168,7 @@ func (l *raftLogger) Error(format string, args ...interface{}) {
 	l.errorBuf <- LogEvent{
 		Level:  Error,
 		Format: format,
-		Args:   args,
+		Args:   convertToLogArgs(args),
 	}
 }
 
@@ -161,7 +179,7 @@ func (l *raftLogger) Trace(format string, args ...interface{}) {
 	l.traceBuf <- LogEvent{
 		Level:  Trace,
 		Format: format,
-		Args:   args,
+		Args:   convertToLogArgs(args),
 	}
 }
 
@@ -211,6 +229,28 @@ type LogSink interface {
 	OnEvent(name string, level LogLevel, format string, args ...interface{})
 }
 
+type ConsoleLogSink struct {
+}
+
+func (fl *ConsoleLogSink) OnEvent(name string, level LogLevel, format string, args ...interface{}) {
+	timeStr := time.Now().Format(TimeFormatStr)
+	switch level {
+	case Debug:
+		fmt.Printf(format + "\n", timeStr, DebugLevel, args)
+	case Info:
+		fmt.Printf(format + "\n", timeStr, InfoLevel, args)
+	case Warn:
+		fmt.Printf(format + "\n", timeStr, WarnLevel, args)
+	case Error:
+		fmt.Printf(format + "\n", timeStr, ErrorLevel, args)
+	case Trace:
+		fmt.Printf(format + "\n", timeStr, TraceLevel, args)
+	default:
+		// do nothing
+	}
+}
+
+
 type FileLogSink struct {
 	logger *log.Logger
 }
@@ -231,4 +271,21 @@ func (fl *FileLogSink) OnEvent(name string, level LogLevel, format string, args 
 	default:
 		// do nothing
 	}
+}
+
+// 重新构建日志参数
+func convertToLogArgs(args []interface{}) []interface{} {
+	a := make([]interface{}, len(args)+2)
+	a[0], a[1] = GetCaller(4)
+	if args != nil {
+		for i := 4; i < len(a); i++ {
+			a[i] = args[i-2]
+		}
+	}
+	return a
+}
+
+func GetCaller(depth int) (string, int) {
+	_, file, line, _ := runtime.Caller(depth)
+	return file, line
 }

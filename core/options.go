@@ -1,11 +1,9 @@
-package github
+package core
 
 import (
 	"runtime"
 
-	"github.com/pole-group/lraft/core"
 	"github.com/pole-group/lraft/entity"
-	"github.com/pole-group/lraft/storage"
 )
 
 type NodeOptions struct {
@@ -27,7 +25,7 @@ type NodeOptions struct {
 	CliRpcGoroutinePoolSize  int32
 	RaftRpcGoroutinePoolSize int32
 	EnableMetrics            bool
-	SnapshotThrottle         storage.SnapshotThrottle
+	SnapshotThrottle         SnapshotThrottle
 }
 
 func NewDefaultNodeOptions() NodeOptions {
@@ -70,14 +68,21 @@ func (ro ReplicatorOptions) GetDynamicHeartBeatTimeoutMs() int32 {
 
 type BallotBoxOptions struct {
 	Waiter       FSMCaller
-	ClosureQueue *core.ClosureQueue
+	ClosureQueue *ClosureQueue
 }
 
 type FSMCallerOptions struct {
-	LogManager    storage.LogManager
+	LogManager    LogManager
 	FSM           StateMachine
-	AfterShutdown core.Closure
+	AfterShutdown Closure
 	BootstrapID   *entity.LogId
-	ClosureQueue  *core.ClosureQueue
-	Node          *NodeImpl
+	ClosureQueue  *ClosureQueue
+	Node          *nodeImpl
 }
+
+
+type SnapshotCopierOptions struct {
+
+}
+
+

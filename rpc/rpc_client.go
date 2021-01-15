@@ -11,7 +11,7 @@ import (
 	"github.com/pole-group/lraft/transport"
 )
 
-type RaftRPCClient struct {
+type RpcClient struct {
 	lock    sync.RWMutex
 	sockets map[string]rpcClient
 	openTSL bool
@@ -22,14 +22,14 @@ type rpcClient struct {
 	ctx    context.Context
 }
 
-func NewRaftRPCClient(openTSL bool) *RaftRPCClient {
-	return &RaftRPCClient{
+func NewRaftRPCClient(openTSL bool) *RpcClient {
+	return &RpcClient{
 		sockets: make(map[string]rpcClient),
 		openTSL: openTSL,
 	}
 }
 
-func (c *RaftRPCClient) computeIfAbsent(endpoint entity.Endpoint) {
+func (c *RpcClient) computeIfAbsent(endpoint entity.Endpoint) {
 	defer c.lock.Unlock()
 	c.lock.Lock()
 
@@ -48,7 +48,7 @@ func (c *RaftRPCClient) computeIfAbsent(endpoint entity.Endpoint) {
 	}
 }
 
-func (c *RaftRPCClient) SendRequest(endpoint entity.Endpoint, req *transport.GrpcRequest) (mono.Mono, error) {
+func (c *RpcClient) SendRequest(endpoint entity.Endpoint, req *transport.GrpcRequest) (mono.Mono, error) {
 	c.computeIfAbsent(endpoint)
 	if rpcC, exist := c.sockets[endpoint.GetDesc()]; exist {
 		return rpcC.client.Request(req)

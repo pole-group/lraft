@@ -1,4 +1,4 @@
-package github
+package core
 
 import (
 	"sync"
@@ -9,20 +9,18 @@ import (
 	"github.com/rsocket/rsocket-go/payload"
 	"github.com/rsocket/rsocket-go/rx/flux"
 
-	"github.com/pole-group/lraft/core"
 	"github.com/pole-group/lraft/entity"
 	"github.com/pole-group/lraft/logger"
+	proto2 "github.com/pole-group/lraft/proto"
 	"github.com/pole-group/lraft/rafterror"
-	"github.com/pole-group/lraft/replicate"
 	"github.com/pole-group/lraft/rpc"
-	"github.com/pole-group/lraft/storage"
 	"github.com/pole-group/lraft/transport"
 	"github.com/pole-group/lraft/utils"
 )
 
 type LogEntryAndClosure struct {
 	Entry        *entity.LogEntry
-	Done         core.Closure
+	Done         Closure
 	ExpectedTerm int64
 	Latch        *sync.WaitGroup
 }
@@ -52,7 +50,7 @@ const (
 )
 
 type ConfigurationCtx struct {
-	node        *NodeImpl
+	node        *nodeImpl
 	stage       Stage
 	nChanges    int32
 	version     int64
@@ -62,10 +60,10 @@ type ConfigurationCtx struct {
 
 	learners    []*entity.PeerId
 	oldLearners []*entity.PeerId
-	done        core.Closure
+	done        Closure
 }
 
-func NewConfigurationCtx(node *NodeImpl) *ConfigurationCtx {
+func NewConfigurationCtx(node *nodeImpl) *ConfigurationCtx {
 	return &ConfigurationCtx{
 		node:    node,
 		stage:   StageNone,
@@ -73,7 +71,7 @@ func NewConfigurationCtx(node *NodeImpl) *ConfigurationCtx {
 	}
 }
 
-func (cc *ConfigurationCtx) Start(conf, oldConf *entity.Configuration, done core.Closure) {
+func (cc *ConfigurationCtx) Start(conf, oldConf *entity.Configuration, done Closure) {
 
 }
 
@@ -94,13 +92,13 @@ type Node interface {
 
 	IsLeader() bool
 
-	Shutdown(done core.Closure)
+	Shutdown(done Closure)
 
 	Join()
 
 	Apply(task *entity.Task)
 
-	ReadIndex(reqCtx []byte, done *core.ReadIndexClosure)
+	ReadIndex(reqCtx []byte, done *ReadIndexClosure)
 
 	ListPeers() []*entity.PeerId
 
@@ -110,21 +108,21 @@ type Node interface {
 
 	ListAliceLearners() []*entity.PeerId
 
-	AddPeer(peer *entity.PeerId, done core.Closure)
+	AddPeer(peer *entity.PeerId, done Closure)
 
-	RemovePeer(peer *entity.PeerId, done core.Closure)
+	RemovePeer(peer *entity.PeerId, done Closure)
 
-	ChangePeers(newConf *entity.Configuration, done core.Closure)
+	ChangePeers(newConf *entity.Configuration, done Closure)
 
 	ResetPeers(newConf *entity.Configuration) entity.Status
 
-	AddLearners(learners []*entity.PeerId, done core.Closure)
+	AddLearners(learners []*entity.PeerId, done Closure)
 
-	RemoveLearners(learners []*entity.PeerId, done core.Closure)
+	RemoveLearners(learners []*entity.PeerId, done Closure)
 
-	ResetLearners(learners []*entity.PeerId, done core.Closure)
+	ResetLearners(learners []*entity.PeerId, done Closure)
 
-	Snapshot(done core.Closure)
+	Snapshot(done Closure)
 
 	ResetElectionTimeoutMs(electionTimeoutMs int32)
 
@@ -132,13 +130,13 @@ type Node interface {
 
 	ReadCommittedUserLog(index int64) *entity.UserLog
 
-	AddReplicatorStateListener(replicatorStateListener replicate.ReplicatorStateListener)
+	AddReplicatorStateListener(replicatorStateListener ReplicatorStateListener)
 
-	RemoveReplicatorStateListener(replicatorStateListener replicate.ReplicatorStateListener)
+	RemoveReplicatorStateListener(replicatorStateListener ReplicatorStateListener)
 
 	ClearReplicatorStateListeners()
 
-	GetReplicatorStatueListeners() []replicate.ReplicatorStateListener
+	GetReplicatorStatueListeners() []ReplicatorStateListener
 
 	GetNodeTargetPriority() int32
 }
@@ -184,7 +182,7 @@ func IsNodeActive(state NodeState) bool {
 	return state < StateError
 }
 
-type NodeImpl struct {
+type nodeImpl struct {
 	rwMutex             sync.RWMutex
 	state               NodeState
 	nodeID              entity.NodeId
@@ -196,143 +194,145 @@ type NodeImpl struct {
 	lastLeaderTimestamp int64
 	options             NodeOptions
 	raftOptions         RaftOptions
+	voteCtx             *entity.Ballot
+	preVoteCtx          *entity.Ballot
 	ballotBox           *BallotBox
 	serverID            *entity.PeerId
 	handler             *raftRpcHandler
-	logManager			storage.LogManager
+	logManager          LogManager
 }
 
-func (ni *NodeImpl) GetLeaderID() *entity.PeerId {
-
-}
-
-func (ni *NodeImpl) GetNodeID() *entity.NodeId {
+func (ni *nodeImpl) GetLeaderID() *entity.PeerId {
 
 }
 
-func (ni *NodeImpl) GetGroupID() string {
+func (ni *nodeImpl) GetNodeID() *entity.NodeId {
 
 }
 
-func (ni *NodeImpl) GetOptions() NodeOptions {
+func (ni *nodeImpl) GetGroupID() string {
 
 }
 
-func (ni *NodeImpl) GetRaftOptions() RaftOptions {
+func (ni *nodeImpl) GetOptions() NodeOptions {
 
 }
 
-func (ni *NodeImpl) IsLeader() bool {
+func (ni *nodeImpl) GetRaftOptions() RaftOptions {
 
 }
 
-func (ni *NodeImpl) Shutdown(done core.Closure) {
+func (ni *nodeImpl) IsLeader() bool {
 
 }
 
-func (ni *NodeImpl) Join() {
+func (ni *nodeImpl) Shutdown(done Closure) {
 
 }
 
-func (ni *NodeImpl) Apply(task *entity.Task) {
+func (ni *nodeImpl) Join() {
 
 }
 
-func (ni *NodeImpl) ReadIndex(reqCtx []byte, done *core.ReadIndexClosure) {
+func (ni *nodeImpl) Apply(task *entity.Task) {
 
 }
 
-func (ni *NodeImpl) ListPeers() []*entity.PeerId {
+func (ni *nodeImpl) ReadIndex(reqCtx []byte, done *ReadIndexClosure) {
 
 }
 
-func (ni *NodeImpl) ListAlivePeers() []*entity.PeerId {
+func (ni *nodeImpl) ListPeers() []*entity.PeerId {
 
 }
 
-func (ni *NodeImpl) ListLearners() []*entity.PeerId {
+func (ni *nodeImpl) ListAlivePeers() []*entity.PeerId {
 
 }
 
-func (ni *NodeImpl) ListAliceLearners() []*entity.PeerId {
+func (ni *nodeImpl) ListLearners() []*entity.PeerId {
 
 }
 
-func (ni *NodeImpl) AddPeer(peer *entity.PeerId, done core.Closure) {
+func (ni *nodeImpl) ListAliceLearners() []*entity.PeerId {
 
 }
 
-func (ni *NodeImpl) RemovePeer(peer *entity.PeerId, done core.Closure) {
+func (ni *nodeImpl) AddPeer(peer *entity.PeerId, done Closure) {
 
 }
 
-func (ni *NodeImpl) ChangePeers(newConf *entity.Configuration, done core.Closure) {
+func (ni *nodeImpl) RemovePeer(peer *entity.PeerId, done Closure) {
 
 }
 
-func (ni *NodeImpl) ResetPeers(newConf *entity.Configuration) entity.Status {
+func (ni *nodeImpl) ChangePeers(newConf *entity.Configuration, done Closure) {
 
 }
 
-func (ni *NodeImpl) AddLearners(learners []*entity.PeerId, done core.Closure) {
+func (ni *nodeImpl) ResetPeers(newConf *entity.Configuration) entity.Status {
 
 }
 
-func (ni *NodeImpl) RemoveLearners(learners []*entity.PeerId, done core.Closure) {
+func (ni *nodeImpl) AddLearners(learners []*entity.PeerId, done Closure) {
 
 }
 
-func (ni *NodeImpl) ResetLearners(learners []*entity.PeerId, done core.Closure) {
+func (ni *nodeImpl) RemoveLearners(learners []*entity.PeerId, done Closure) {
 
 }
 
-func (ni *NodeImpl) Snapshot(done core.Closure) {
+func (ni *nodeImpl) ResetLearners(learners []*entity.PeerId, done Closure) {
 
 }
 
-func (ni *NodeImpl) ResetElectionTimeoutMs(electionTimeoutMs int32) {
+func (ni *nodeImpl) Snapshot(done Closure) {
 
 }
 
-func (ni *NodeImpl) TransferLeadershipTo(peer *entity.PeerId) entity.Status {
+func (ni *nodeImpl) ResetElectionTimeoutMs(electionTimeoutMs int32) {
 
 }
 
-func (ni *NodeImpl) ReadCommittedUserLog(index int64) *entity.UserLog {
+func (ni *nodeImpl) TransferLeadershipTo(peer *entity.PeerId) entity.Status {
 
 }
 
-func (ni *NodeImpl) AddReplicatorStateListener(replicatorStateListener replicate.ReplicatorStateListener) {
+func (ni *nodeImpl) ReadCommittedUserLog(index int64) *entity.UserLog {
 
 }
 
-func (ni *NodeImpl) RemoveReplicatorStateListener(replicatorStateListener replicate.ReplicatorStateListener) {
+func (ni *nodeImpl) AddReplicatorStateListener(replicatorStateListener ReplicatorStateListener) {
 
 }
 
-func (ni *NodeImpl) ClearReplicatorStateListeners() {
+func (ni *nodeImpl) RemoveReplicatorStateListener(replicatorStateListener ReplicatorStateListener) {
 
 }
 
-func (ni *NodeImpl) GetReplicatorStatueListeners() []replicate.ReplicatorStateListener {
+func (ni *nodeImpl) ClearReplicatorStateListeners() {
 
 }
 
-func (ni *NodeImpl) GetNodeTargetPriority() int32 {
+func (ni *nodeImpl) GetReplicatorStatueListeners() []ReplicatorStateListener {
 
 }
 
-func (ni *NodeImpl) OnError(err rafterror.RaftError) {
+func (ni *nodeImpl) GetNodeTargetPriority() int32 {
 
 }
 
-func (ni *NodeImpl) IsCurrentLeaderValid() bool {
+func (ni *nodeImpl) OnError(err rafterror.RaftError) {
+
+}
+
+func (ni *nodeImpl) IsCurrentLeaderValid() bool {
 	return utils.GetCurrentTimeMs()-ni.lastLeaderTimestamp < ni.options.ElectionTimeoutMs
 }
 
 type LeaderStableClosure struct {
-	core.StableClosure
-	node *NodeImpl
+	StableClosure
+	node *nodeImpl
 }
 
 func (lsc *LeaderStableClosure) Run(status entity.Status) {
@@ -345,9 +345,9 @@ func (lsc *LeaderStableClosure) Run(status entity.Status) {
 }
 
 type readIndexHeartbeatResponseClosure struct {
-	core.RpcResponseClosure
-	readIndexResp		*core.ReadIndexResponse
-	closure            *core.RpcResponseClosure
+	RpcResponseClosure
+	readIndexResp      *proto2.ReadIndexResponse
+	closure            *RpcResponseClosure
 	quorum             int32
 	failPeersThreshold int32
 	ackSuccess         int32
@@ -355,17 +355,17 @@ type readIndexHeartbeatResponseClosure struct {
 	isDone             bool
 }
 
-func (rhc *readIndexHeartbeatResponseClosure) Run(status entity.Status)  {
+func (rhc *readIndexHeartbeatResponseClosure) Run(status entity.Status) {
 	if rhc.isDone {
 		return
 	}
-	if status.IsOK() && rhc.Resp.(*core.AppendEntriesResponse).Success {
-		rhc.ackSuccess ++
+	if status.IsOK() && rhc.Resp.(*proto2.AppendEntriesResponse).Success {
+		rhc.ackSuccess++
 	} else {
-		rhc.ackFailures ++
+		rhc.ackFailures++
 	}
 	utils.RequireNonNil(rhc.readIndexResp, "ReadIndexResponse")
-	if rhc.ackSuccess + 1 >= rhc.quorum {
+	if rhc.ackSuccess+1 >= rhc.quorum {
 		rhc.readIndexResp.Success = true
 	} else if rhc.ackFailures >= rhc.failPeersThreshold {
 		rhc.readIndexResp.Success = false
@@ -376,7 +376,7 @@ func (rhc *readIndexHeartbeatResponseClosure) Run(status entity.Status)  {
 }
 
 type raftRpcHandler struct {
-	node *NodeImpl
+	node *nodeImpl
 }
 
 func (rrh *raftRpcHandler) handlePreVoteRequest() func(input payload.Payload, req proto.Message, sink mono.Sink) {
@@ -390,13 +390,13 @@ func (rrh *raftRpcHandler) handlePreVoteRequest() func(input payload.Payload, re
 		}()
 		node.rwMutex.Lock()
 
-		preVoteReq := req.(*core.RequestVoteRequest)
+		preVoteReq := req.(*proto2.RequestVoteRequest)
 		if !IsNodeActive(node.state) {
 			node.logger.Warn("Node %s is not in active state, currTerm=%d.", node.nodeID.GetDesc(), node.currTerm)
-			voteResp := &core.RequestVoteResponse{
+			voteResp := &proto2.RequestVoteResponse{
 				Term:          0,
 				Granted:       false,
-				ErrorResponse: core.NewErrorResponse(entity.EINVAL, "Node %s is not in active state, state %s.", node.nodeID.GetDesc(), node.state.GetName()),
+				ErrorResponse: utils.NewErrorResponse(entity.EINVAL, "Node %s is not in active state, state %s.", node.nodeID.GetDesc(), node.state.GetName()),
 			}
 			rrh.monoSink(voteResp, sink)
 			return
@@ -405,10 +405,10 @@ func (rrh *raftRpcHandler) handlePreVoteRequest() func(input payload.Payload, re
 		candidateId := &entity.PeerId{}
 		if !candidateId.Parse(preVoteReq.ServerID) {
 			node.logger.Warn("Node %s received PreVoteRequest from %s serverId bad format.", node.nodeID.GetDesc(), preVoteReq.ServerID)
-			voteResp := &core.RequestVoteResponse{
+			voteResp := &proto2.RequestVoteResponse{
 				Term:          0,
 				Granted:       false,
-				ErrorResponse: core.NewErrorResponse(entity.EINVAL, "Parse candidateId failed: %s.", preVoteReq.ServerID),
+				ErrorResponse: utils.NewErrorResponse(entity.EINVAL, "Parse candidateId failed: %s.", preVoteReq.ServerID),
 			}
 			rrh.monoSink(voteResp, sink)
 			return
@@ -424,7 +424,7 @@ func (rrh *raftRpcHandler) handlePreVoteRequest() func(input payload.Payload, re
 				node.logger.Info("Node %s ignore PreVoteRequest from %s, term=%d, currTerm=%d.", node.nodeID.GetDesc(), preVoteReq.ServerID, preVoteReq.Term, node.currTerm)
 				rrh.checkReplicator(candidateId)
 				break
-			} else if preVoteReq.Term == node.currTerm + 1 {
+			} else if preVoteReq.Term == node.currTerm+1 {
 				rrh.checkReplicator(candidateId)
 			}
 			doUnLock = false
@@ -439,7 +439,7 @@ func (rrh *raftRpcHandler) handlePreVoteRequest() func(input payload.Payload, re
 				break
 			}
 		}
-		preVoteResp := &core.RequestVoteResponse{
+		preVoteResp := &proto2.RequestVoteResponse{
 			Term:    node.currTerm,
 			Granted: granted,
 		}
@@ -448,7 +448,7 @@ func (rrh *raftRpcHandler) handlePreVoteRequest() func(input payload.Payload, re
 }
 
 func (rrh *raftRpcHandler) checkReplicator(candidate *entity.PeerId) {
-	
+
 }
 
 func (rrh *raftRpcHandler) monoSink(resp proto.Message, sink mono.Sink) {

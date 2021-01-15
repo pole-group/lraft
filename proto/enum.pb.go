@@ -8,7 +8,7 @@
 // 	protoc        v3.12.3
 // source: enum.proto
 
-package core
+package proto
 
 import (
 	proto "github.com/golang/protobuf/proto"
@@ -175,8 +175,8 @@ func file_enum_proto_rawDescGZIP() []byte {
 
 var file_enum_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_enum_proto_goTypes = []interface{}{
-	(EntryType)(0), // 0: core.EntryType
-	(ErrorType)(0), // 1: core.ErrorType
+	(EntryType)(0), // 0: proto.EntryType
+	(ErrorType)(0), // 1: proto.ErrorType
 }
 var file_enum_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type

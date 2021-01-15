@@ -8,7 +8,7 @@
 // 	protoc        v3.12.3
 // source: log.proto
 
-package core
+package proto
 
 import (
 	proto "github.com/golang/protobuf/proto"
@@ -34,7 +34,7 @@ type PBLogEntry struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Type        EntryType `protobuf:"varint,1,opt,name=type,proto3,enum=core.EntryType" json:"type,omitempty"`
+	Type        EntryType `protobuf:"varint,1,opt,name=type,proto3,enum=proto.EntryType" json:"type,omitempty"`
 	Term        int64     `protobuf:"varint,2,opt,name=term,proto3" json:"term,omitempty"`
 	Index       int64     `protobuf:"varint,3,opt,name=index,proto3" json:"index,omitempty"`
 	Peers       [][]byte  `protobuf:"bytes,4,rep,name=peers,proto3" json:"peers,omitempty"`
@@ -178,11 +178,11 @@ func file_log_proto_rawDescGZIP() []byte {
 
 var file_log_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_log_proto_goTypes = []interface{}{
-	(*PBLogEntry)(nil), // 0: core.PBLogEntry
-	(EntryType)(0),     // 1: core.EntryType
+	(*PBLogEntry)(nil), // 0: proto.PBLogEntry
+	(EntryType)(0),     // 1: proto.EntryType
 }
 var file_log_proto_depIdxs = []int32{
-	1, // 0: core.PBLogEntry.type:type_name -> core.EntryType
+	1, // 0: proto.PBLogEntry.type:type_name -> proto.EntryType
 	1, // [1:1] is the sub-list for method output_type
 	1, // [1:1] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name

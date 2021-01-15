@@ -8,7 +8,7 @@
 // 	protoc        v3.12.3
 // source: raft.proto
 
-package core
+package proto
 
 import (
 	proto "github.com/golang/protobuf/proto"
@@ -35,7 +35,7 @@ type EntryMeta struct {
 	unknownFields protoimpl.UnknownFields
 
 	Term    int64     `protobuf:"varint,1,opt,name=term,proto3" json:"term,omitempty"`
-	Type    EntryType `protobuf:"varint,2,opt,name=type,proto3,enum=core.EntryType" json:"type,omitempty"`
+	Type    EntryType `protobuf:"varint,2,opt,name=type,proto3,enum=proto.EntryType" json:"type,omitempty"`
 	Peers   []string  `protobuf:"bytes,3,rep,name=peers,proto3" json:"peers,omitempty"`
 	DataLen int64     `protobuf:"varint,4,opt,name=dataLen,proto3" json:"dataLen,omitempty"`
 	// Don't change field id of `old_peers' in the consideration of backward
@@ -272,12 +272,12 @@ func file_raft_proto_rawDescGZIP() []byte {
 
 var file_raft_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_raft_proto_goTypes = []interface{}{
-	(*EntryMeta)(nil),    // 0: core.EntryMeta
-	(*SnapshotMeta)(nil), // 1: core.SnapshotMeta
-	(EntryType)(0),       // 2: core.EntryType
+	(*EntryMeta)(nil),    // 0: proto.EntryMeta
+	(*SnapshotMeta)(nil), // 1: proto.SnapshotMeta
+	(EntryType)(0),       // 2: proto.EntryType
 }
 var file_raft_proto_depIdxs = []int32{
-	2, // 0: core.EntryMeta.type:type_name -> core.EntryType
+	2, // 0: proto.EntryMeta.type:type_name -> proto.EntryType
 	1, // [1:1] is the sub-list for method output_type
 	1, // [1:1] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name

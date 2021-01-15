@@ -32,7 +32,7 @@ func newRSocketClient(serverAddr string, openTSL bool) (*RSocketClient, error) {
 
 		}).
 		Transport(func(ctx context.Context) (*transport.Transport, error) {
-			tcb := rsocket.TCPClient().SetHostAndPort(ip, int(port))
+			tcb := rsocket.TCPClient().SetHostAndPort(ip, port)
 			if openTSL {
 				tcb.SetTLSConfig(&tls.Config{})
 			}
