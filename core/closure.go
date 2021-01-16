@@ -12,7 +12,6 @@ import (
 
 	"github.com/pole-group/lraft/entity"
 	proto2 "github.com/pole-group/lraft/proto"
-	"github.com/pole-group/lraft/rafterror"
 	"github.com/pole-group/lraft/rpc"
 	"github.com/pole-group/lraft/transport"
 	"github.com/pole-group/lraft/utils"
@@ -284,7 +283,7 @@ func (sc *StableClosure) Run(status entity.Status) {
 }
 
 type OnErrorClosure struct {
-	Err rafterror.RaftError
+	Err entity.RaftError
 	F   func(status entity.Status)
 }
 
