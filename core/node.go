@@ -451,7 +451,8 @@ func (rrh *raftRpcHandler) handlePreVoteRequest() func(input payload.Payload, re
 			voteResp := &proto2.RequestVoteResponse{
 				Term:          0,
 				Granted:       false,
-				ErrorResponse: utils.NewErrorResponse(entity.EINVAL, "Node %s is not in active state, state %s.", node.nodeID.GetDesc(), node.state.GetName()),
+				ErrorResponse: entity.NewErrorResponse(entity.EINVAL, "Node %s is not in active state, state %s.",
+					node.nodeID.GetDesc(), node.state.GetName()),
 			}
 			rrh.monoSink(voteResp, sink)
 			return
@@ -464,7 +465,7 @@ func (rrh *raftRpcHandler) handlePreVoteRequest() func(input payload.Payload, re
 			voteResp := &proto2.RequestVoteResponse{
 				Term:          0,
 				Granted:       false,
-				ErrorResponse: utils.NewErrorResponse(entity.EINVAL, "Parse candidateId failed: %s.", preVoteReq.ServerID),
+				ErrorResponse: entity.NewErrorResponse(entity.EINVAL, "Parse candidateId failed: %s.", preVoteReq.ServerID),
 			}
 			rrh.monoSink(voteResp, sink)
 			return

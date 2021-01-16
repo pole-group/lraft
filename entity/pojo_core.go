@@ -3,6 +3,7 @@ package entity
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"strings"
 
 	"github.com/golang/protobuf/proto"
@@ -10,6 +11,14 @@ import (
 	raft "github.com/pole-group/lraft/proto"
 	"github.com/pole-group/lraft/utils"
 )
+
+func NewErrorResponse(code RaftErrorCode, format string, args ...interface{}) *raft.ErrorResponse {
+	errResp := &raft.ErrorResponse{}
+	errResp.ErrorCode = int32(code)
+	errResp.ErrorMsg = fmt.Sprintf(format, args)
+	return errResp
+}
+
 
 type Status struct {
 	state *State
