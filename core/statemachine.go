@@ -11,7 +11,6 @@ import (
 	"github.com/pole-group/lraft/entity"
 	"github.com/pole-group/lraft/logger"
 	raft "github.com/pole-group/lraft/proto"
-	"github.com/pole-group/lraft/rafterror"
 	"github.com/pole-group/lraft/utils"
 )
 
@@ -61,7 +60,7 @@ type StateMachine interface {
 
 	OnLeaderStop(status entity.Status)
 
-	OnError(e rafterror.RaftError)
+	OnError(e entity.RaftError)
 
 	OnConfigurationCommitted(conf *entity.Configuration)
 
@@ -83,14 +82,14 @@ type IteratorImpl struct {
 	committedIndex    int64
 	currEntry         *entity.LogEntry
 	applyingIndex     int64
-	err               *rafterror.RaftError
+	err               *entity.RaftError
 }
 
 func (iti *IteratorImpl) Entry() *entity.LogEntry {
 	return iti.currEntry
 }
 
-func (iti *IteratorImpl) GetError() *rafterror.RaftError {
+func (iti *IteratorImpl) GetError() *entity.RaftError {
 	return iti.err
 }
 
@@ -152,9 +151,9 @@ func (iti *IteratorImpl) SetErrorAndRollback(nTail int64, st *entity.Status) {
 	iti.err.Status.SetError(entity.EStateMachine, ErrRollbackMsg, iti.currentIndex, utils.IF(st != nil, st, "none"))
 }
 
-func (iti *IteratorImpl) GetOrCreateError() *rafterror.RaftError {
+func (iti *IteratorImpl) GetOrCreateError() *entity.RaftError {
 	if iti.err == nil {
-		iti.err = &rafterror.RaftError{
+		iti.err = &entity.RaftError{
 			Status: entity.NewEmptyStatus(),
 		}
 	}
@@ -285,7 +284,7 @@ type FSMCaller interface {
 
 	OnStopFollowing(context entity.LeaderChangeContext) bool
 
-	OnError(err rafterror.RaftError) bool
+	OnError(err entity.RaftError) bool
 
 	GetLastAppliedIndex() int64
 
@@ -302,7 +301,7 @@ type FSMCallerImpl struct {
 	node                         *nodeImpl
 	currTask                     TaskType
 	applyingIndex                int64
-	error                        rafterror.RaftError
+	error                        entity.RaftError
 	shutdownLatch                *sync.WaitGroup
 	lastAppliedLogIndexListeners []LastAppliedLogIndexListener
 	applyTaskPool                sync.Pool
@@ -318,7 +317,7 @@ func (fci *FSMCallerImpl) Init(ctx context.Context, opt FSMCallerOptions) bool {
 	fci.closureQueue = opt.ClosureQueue
 	fci.afterShutdown = opt.AfterShutdown
 	fci.node = opt.Node
-	fci.error = rafterror.RaftError{
+	fci.error = entity.RaftError{
 		ErrType: raft.ErrorType_ErrorTypeNone,
 	}
 	fci.openHandler(ctx)
@@ -378,7 +377,7 @@ func (fci *FSMCallerImpl) enqueueTask(at *ApplyTask) bool {
 	}
 	isOk, err := utils.PublishEventNonBlock(at)
 	if err != nil {
-		re := rafterror.RaftError{
+		re := entity.RaftError{
 			ErrType: raft.ErrorType_ErrorTypeStateMachine,
 			Status:  entity.NewStatus(entity.EINTR, err.Error()),
 		}
@@ -386,7 +385,7 @@ func (fci *FSMCallerImpl) enqueueTask(at *ApplyTask) bool {
 		return false
 	}
 	if !isOk {
-		re := rafterror.RaftError{
+		re := entity.RaftError{
 			ErrType: raft.ErrorType_ErrorTypeStateMachine,
 			Status:  entity.NewStatus(entity.EBUSY, "FSMCaller is overload."),
 		}
@@ -396,7 +395,7 @@ func (fci *FSMCallerImpl) enqueueTask(at *ApplyTask) bool {
 	return true
 }
 
-func (fci *FSMCallerImpl) setError(err rafterror.RaftError) {
+func (fci *FSMCallerImpl) setError(err entity.RaftError) {
 	if fci.error.ErrType != raft.ErrorType_ErrorTypeNone {
 		return
 	}
@@ -479,7 +478,7 @@ func (fci *FSMCallerImpl) OnStopFollowing(context entity.LeaderChangeContext) bo
 	return fci.enqueueTask(at)
 }
 
-func (fci *FSMCallerImpl) OnError(err rafterror.RaftError) bool {
+func (fci *FSMCallerImpl) OnError(err entity.RaftError) bool {
 	if !fci.error.Status.IsOK() {
 		fci.logger.Warn("FSMCaller already in error status, ignore new error: %s", err.Error())
 		return false
@@ -702,7 +701,7 @@ func (fci *FSMCallerImpl) doSnapshotLoad(closure LoadSnapshotClosure) {
 	if snapshotMeta == nil {
 		closure.Run(entity.NewStatus(entity.EINVAL, "SnapshotReader load SnapshotMeta failed"))
 		if reader.Status().GetCode() == entity.EIO {
-			err := rafterror.RaftError{
+			err := entity.RaftError{
 				ErrType: raft.ErrorType_ErrorTypeSnapshot,
 				Status:  entity.NewStatus(entity.EIO, "Fail to load snapshot meta"),
 			}
@@ -722,7 +721,7 @@ func (fci *FSMCallerImpl) doSnapshotLoad(closure LoadSnapshotClosure) {
 
 	if !fci.fsm.OnSnapshotLoad(reader) {
 		closure.Run(entity.NewStatus(-1, "StateMachine onSnapshotLoad failed"))
-		err := rafterror.RaftError{
+		err := entity.RaftError{
 			ErrType: raft.ErrorType_ErrorTypeStateMachine,
 			Status:  entity.NewStatus(entity.EStateMachine, "StateMachine onSnapshotLoad failed"),
 		}

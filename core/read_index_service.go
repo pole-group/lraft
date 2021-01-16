@@ -9,7 +9,6 @@ import (
 	"github.com/pole-group/lraft/entity"
 	log "github.com/pole-group/lraft/logger"
 	raft "github.com/pole-group/lraft/proto"
-	"github.com/pole-group/lraft/rafterror"
 	"github.com/pole-group/lraft/utils"
 )
 
@@ -43,7 +42,7 @@ type ReadOnlyOperator struct {
 	rwLock              sync.RWMutex
 	fsmCaller           FSMCaller
 	shutdown            chan int8
-	err                 rafterror.RaftError
+	err                 entity.RaftError
 	raftOpt             RaftOptions
 	node                *nodeImpl
 	replicatorGroup     *ReplicatorGroup

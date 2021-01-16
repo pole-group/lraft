@@ -14,7 +14,6 @@ import (
 
 	log "github.com/pole-group/lraft/logger"
 	proto2 "github.com/pole-group/lraft/proto"
-	"github.com/pole-group/lraft/rafterror"
 	"github.com/pole-group/lraft/rpc"
 	"github.com/pole-group/lraft/transport"
 	"github.com/pole-group/lraft/utils"
@@ -325,7 +324,7 @@ func (ni *nodeImpl) GetNodeTargetPriority() int32 {
 
 }
 
-func (ni *nodeImpl) OnError(err rafterror.RaftError) {
+func (ni *nodeImpl) OnError(err entity.RaftError) {
 
 }
 
