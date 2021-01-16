@@ -8,10 +8,13 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/golang/protobuf/ptypes"
 
 	"github.com/pole-group/lraft/entity"
+	proto2 "github.com/pole-group/lraft/proto"
 	"github.com/pole-group/lraft/rafterror"
-	"github.com/pole-group/lraft/storage"
+	"github.com/pole-group/lraft/rpc"
+	"github.com/pole-group/lraft/transport"
 	"github.com/pole-group/lraft/utils"
 )
 
@@ -149,13 +152,13 @@ type TaskClosure interface {
 type LoadSnapshotClosure interface {
 	Closure
 
-	Start() storage.SnapshotReader
+	Start() SnapshotReader
 }
 
 type SaveSnapshotClosure interface {
 	Closure
 
-	Start(meta *SnapshotMeta) storage.SnapshotWriter
+	Start(meta *proto2.SnapshotMeta) SnapshotWriter
 }
 
 const (
@@ -191,6 +194,7 @@ func NewReadIndexClosure(f func(status entity.Status, index int64, reqCtx []byte
 				if !isOk {
 					return
 				}
+				rc.SetResult(InvalidLogIndex, nil)
 				rc.runUserCallback(entity.NewStatus(entity.ETIMEDOUT, "read-index request timeout"))
 				ticker.Stop()
 			}
@@ -206,7 +210,7 @@ func (rc *ReadIndexClosure) runUserCallback(status entity.Status) {
 			//TODO error log
 		}
 	}()
-	rc.f(status, InvalidLogIndex, nil)
+	rc.f(status, rc.index, rc.requestContext)
 }
 
 func (rc *ReadIndexClosure) SetResult(index int64, reqCtx []byte) {
@@ -281,18 +285,78 @@ func (sc *StableClosure) Run(status entity.Status) {
 
 type OnErrorClosure struct {
 	Err rafterror.RaftError
-	F	func(status entity.Status)
+	F   func(status entity.Status)
 }
 
 func (oec *OnErrorClosure) Run(status entity.Status) {
 
 }
 
+const (
+	RpcPending int32 = iota
+	RpcRespond
+)
+
 type RpcResponseClosure struct {
-	Resp	proto.Message
-	F	func(status entity.Status)
+	Resp proto.Message
+	F    func(resp proto.Message, status entity.Status)
 }
 
-func (rrc *RpcResponseClosure) Run(status entity.Status)  {
-	rrc.F(status)
+func (rrc *RpcResponseClosure) Run(status entity.Status) {
+	rrc.F(rrc.Resp, status)
+}
+
+type RpcRequestClosure struct {
+	state       int32
+	rpcCtx      *rpc.RpcContext
+	defaultResp *transport.GrpcResponse
+	F           func(status entity.Status)
+}
+
+func NewRpcRequestClosure(rpcCtx *rpc.RpcContext) *RpcRequestClosure {
+	return &RpcRequestClosure{
+		state:       RpcPending,
+		rpcCtx:      rpcCtx,
+		defaultResp: nil,
+	}
+}
+
+func NewRpcRequestClosureWithDefaultResp(rpcCtx *rpc.RpcContext, defaultResp *transport.GrpcResponse) *RpcRequestClosure {
+	return &RpcRequestClosure{
+		state:       RpcPending,
+		rpcCtx:      rpcCtx,
+		defaultResp: defaultResp,
+	}
+}
+
+func (rrc *RpcRequestClosure) GetRpcCtx() *rpc.RpcContext {
+	return rrc.rpcCtx
+}
+
+func (rrc *RpcRequestClosure) SendResponse(msg *transport.GrpcResponse) {
+	if atomic.CompareAndSwapInt32(&rrc.state, RpcPending, RpcRespond) {
+		rrc.rpcCtx.SendMsg(msg)
+	}
+}
+
+func (rrc *RpcRequestClosure) Run(status entity.Status) {
+
+	errResp := &proto2.ErrorResponse{
+		ErrorCode: int32(status.GetCode()),
+		ErrorMsg:  status.GetMsg(),
+	}
+
+	a, err := ptypes.MarshalAny(errResp)
+	if err != nil {
+		panic(err)
+	}
+
+	rrc.SendResponse(&transport.GrpcResponse{
+		Label: rpc.CommonRpcErrorCommand,
+		Body:  a,
+	})
+}
+
+type AppendEntriesResponseClosure struct {
+	RpcResponseClosure
 }

@@ -1,10 +1,10 @@
-package storage
+package core
 
 import (
 	"github.com/golang/protobuf/proto"
 
-	"github.com/pole-group/lraft/core"
 	"github.com/pole-group/lraft/entity"
+	raft "github.com/pole-group/lraft/proto"
 )
 
 const (
@@ -25,18 +25,34 @@ type Snapshot interface {
 	GetFileMeta(fileName string) proto.Message
 }
 
+type SnapshotExecutor interface {
+
+	GetNode() *nodeImpl
+
+	DoSnapshot(done Closure)
+
+	InstallSnapshot(req *raft.InstallSnapshotRequest, done *RpcRequestClosure)
+
+	stopDownloadingSnapshot(newTerm uint64)
+
+	IsInstallingSnapshot() bool
+
+	GetSnapshotStorage() SnapshotStorage
+
+}
+
 type SnapshotReader interface {
 	Snapshot
 
 	Status() entity.Status
 
-	Load() *core.SnapshotMeta
+	Load() *raft.SnapshotMeta
 
 	GenerateURIForCopy() string
 }
 
 type SnapshotWriter interface {
-	SaveMeta(meta core.SnapshotMeta) bool
+	SaveMeta(meta raft.SnapshotMeta) bool
 
 	AddFile(fileName string, meta proto.Message)
 
@@ -83,6 +99,16 @@ type LogStorage interface {
 	Rest(nextLogIndex int64) bool
 }
 
+type SnapshotStorage interface {
+	SetFilterBeforeCopyRemote() bool
+
+	Create() SnapshotWriter
+
+	Open() SnapshotReader
+
+	CopyFrom(uri string, opts SnapshotCopierOptions)
+}
+
 type LogManager interface {
 	AddLastLogIndexListener(listener LastLogIndexListener)
 
@@ -90,9 +116,9 @@ type LogManager interface {
 
 	Join()
 
-	AppendEntries(entries []*entity.LogEntry, done core.StableClosure)
+	AppendEntries(entries []*entity.LogEntry, done StableClosure)
 
-	SetSnapshot(meta core.SnapshotMeta)
+	SetSnapshot(meta raft.SnapshotMeta)
 
 	ClearBufferedLogs()
 

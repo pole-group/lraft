@@ -57,7 +57,7 @@ func NewRSocketServer(ctx context.Context, label string, port int64, openTSL boo
 					}
 					return listener, err
 				})
-				return &poleServerTransport{rServer: rServer, target: serverTransport}, nil
+				return &lraftServerTransport{rServer: rServer, target: serverTransport}, nil
 			})
 
 		if err := server.Serve(ctx); err != nil {
@@ -91,18 +91,18 @@ func (cm *ConnManager) RemoveConn(conn transport.Conn) {
 	delete(cm.connRepository, netCon.RemoteAddr().String())
 }
 
-type poleServerTransport struct {
+type lraftServerTransport struct {
 	rServer *RSocketServer
 	target  transport.ServerTransport
 }
 
 // Accept register incoming connection handler.
-func (p *poleServerTransport) Accept(acceptor transport.ServerTransportAcceptor) {
+func (p *lraftServerTransport) Accept(acceptor transport.ServerTransportAcceptor) {
 	proxy := func(ctx context.Context, tp *transport.Transport, onClose func(*transport.Transport)) {
 		p.rServer.ConnMgr.PutConn(tp.Connection())
 
 		wrapperOnClose := func(tp *transport.Transport) {
-			p.rServer.ConnMgr.PutConn(tp.Connection())
+			p.rServer.ConnMgr.RemoveConn(tp.Connection())
 			onClose(tp)
 		}
 
@@ -113,10 +113,10 @@ func (p *poleServerTransport) Accept(acceptor transport.ServerTransportAcceptor)
 
 // Listen listens on the network address addr and handles requests on incoming connections.
 // You can specify notifier chan, it'll be sent true/false when server listening success/failed.
-func (p *poleServerTransport) Listen(ctx context.Context, notifier chan<- bool) error {
+func (p *lraftServerTransport) Listen(ctx context.Context, notifier chan<- bool) error {
 	return p.target.Listen(ctx, notifier)
 }
 
-func (p *poleServerTransport) Close() error {
+func (p *lraftServerTransport) Close() error {
 	return p.target.Close()
 }

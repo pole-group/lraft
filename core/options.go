@@ -1,11 +1,9 @@
-package github
+package core
 
 import (
 	"runtime"
 
-	"github.com/pole-group/lraft/core"
 	"github.com/pole-group/lraft/entity"
-	"github.com/pole-group/lraft/storage"
 )
 
 type NodeOptions struct {
@@ -27,7 +25,7 @@ type NodeOptions struct {
 	CliRpcGoroutinePoolSize  int32
 	RaftRpcGoroutinePoolSize int32
 	EnableMetrics            bool
-	SnapshotThrottle         storage.SnapshotThrottle
+	SnapshotThrottle         SnapshotThrottle
 }
 
 func NewDefaultNodeOptions() NodeOptions {
@@ -54,30 +52,49 @@ func NewDefaultNodeOptions() NodeOptions {
 	}
 }
 
+type ReadOnlyOption string
+
+const (
+	ReadOnlyLeaseBased ReadOnlyOption = "ReadOnlyLeaseBased"
+	ReadOnlySafe       ReadOnlyOption = "ReadOnlySafe"
+)
+
 type RaftOptions struct {
+	ReadOnlyOpt ReadOnlyOption
 }
 
 func (ro RaftOptions) GetMaxReplicatorInflightMsgs() int64 {
 	return 0
 }
 
-type ReplicatorOptions struct {
-}
-
-func (ro ReplicatorOptions) GetDynamicHeartBeatTimeoutMs() int32 {
-	return -1
+type replicatorOptions struct {
+	dynamicHeartBeatTimeoutMs int32
+	electionTimeoutMs         int32
+	groupID                   string
+	serverId                  *entity.PeerId
+	peerId                    *entity.PeerId
+	logMgn                    LogManager
+	ballotBox                 *BallotBox
+	node                      *nodeImpl
+	term                      int64
+	snapshotStorage           SnapshotStorage
+	raftRpcOperator           RaftClientOperator
+	replicatorType            ReplicatorType
 }
 
 type BallotBoxOptions struct {
 	Waiter       FSMCaller
-	ClosureQueue *core.ClosureQueue
+	ClosureQueue *ClosureQueue
 }
 
 type FSMCallerOptions struct {
-	LogManager    storage.LogManager
+	LogManager    LogManager
 	FSM           StateMachine
-	AfterShutdown core.Closure
+	AfterShutdown Closure
 	BootstrapID   *entity.LogId
-	ClosureQueue  *core.ClosureQueue
-	Node          *NodeImpl
+	ClosureQueue  *ClosureQueue
+	Node          *nodeImpl
+}
+
+type SnapshotCopierOptions struct {
 }

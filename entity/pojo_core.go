@@ -7,7 +7,7 @@ import (
 
 	"github.com/golang/protobuf/proto"
 
-	"github.com/pole-group/lraft/core"
+	raft "github.com/pole-group/lraft/proto"
 	"github.com/pole-group/lraft/utils"
 )
 
@@ -59,6 +59,13 @@ func (s Status) GetCode() RaftErrorCode {
 
 func (s Status) SetMsg(msg string) {
 	s.state.msg = msg
+}
+
+func (s Status) GetMsg() string {
+	if s.state == nil {
+		return ""
+	}
+	return s.state.msg
 }
 
 func (s Status) SetError(code RaftErrorCode, format string, args ...interface{}) {
@@ -299,7 +306,7 @@ func (l LeaderChangeContext) Copy() LeaderChangeContext {
 }
 
 type LogEntry struct {
-	LogType     core.EntryType
+	LogType     raft.EntryType
 	LogID       *LogId
 	Peers       []*PeerId
 	OldPeers    []*PeerId
@@ -310,7 +317,7 @@ type LogEntry struct {
 	HasChecksum bool
 }
 
-func NewLogEntry(t core.EntryType) *LogEntry {
+func NewLogEntry(t raft.EntryType) *LogEntry {
 	return &LogEntry{
 		LogType: t,
 	}
@@ -344,7 +351,7 @@ func (le *LogEntry) IsCorrupted() bool {
 }
 
 func (le *LogEntry) Encode() []byte {
-	pbL := &core.PBLogEntry{
+	pbL := &raft.PBLogEntry{
 		Type:        le.LogType,
 		Term:        le.LogID.term,
 		Index:       le.LogID.index,
@@ -361,7 +368,7 @@ func (le *LogEntry) Encode() []byte {
 }
 
 func (le *LogEntry) Decode(b []byte) {
-	pbL := &core.PBLogEntry{}
+	pbL := &raft.PBLogEntry{}
 	err := proto.Unmarshal(b, pbL)
 	utils.CheckErr(err)
 }

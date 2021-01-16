@@ -8,7 +8,7 @@
 // 	protoc        v3.12.3
 // source: localstorage.proto
 
-package core
+package proto
 
 import (
 	proto "github.com/golang/protobuf/proto"
@@ -343,18 +343,18 @@ func file_localstorage_proto_rawDescGZIP() []byte {
 
 var file_localstorage_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_localstorage_proto_goTypes = []interface{}{
-	(*ConfigurationPBMeta)(nil),      // 0: core.ConfigurationPBMeta
-	(*LogPBMeta)(nil),                // 1: core.LogPBMeta
-	(*StablePBMeta)(nil),             // 2: core.StablePBMeta
-	(*LocalSnapshotPbMeta)(nil),      // 3: core.LocalSnapshotPbMeta
-	(*LocalSnapshotPbMeta_File)(nil), // 4: core.LocalSnapshotPbMeta.File
-	(*SnapshotMeta)(nil),             // 5: core.SnapshotMeta
-	(*LocalFileMeta)(nil),            // 6: core.LocalFileMeta
+	(*ConfigurationPBMeta)(nil),      // 0: proto.ConfigurationPBMeta
+	(*LogPBMeta)(nil),                // 1: proto.LogPBMeta
+	(*StablePBMeta)(nil),             // 2: proto.StablePBMeta
+	(*LocalSnapshotPbMeta)(nil),      // 3: proto.LocalSnapshotPbMeta
+	(*LocalSnapshotPbMeta_File)(nil), // 4: proto.LocalSnapshotPbMeta.File
+	(*SnapshotMeta)(nil),             // 5: proto.SnapshotMeta
+	(*LocalFileMeta)(nil),            // 6: proto.LocalFileMeta
 }
 var file_localstorage_proto_depIdxs = []int32{
-	5, // 0: core.LocalSnapshotPbMeta.meta:type_name -> core.SnapshotMeta
-	4, // 1: core.LocalSnapshotPbMeta.files:type_name -> core.LocalSnapshotPbMeta.File
-	6, // 2: core.LocalSnapshotPbMeta.File.meta:type_name -> core.LocalFileMeta
+	5, // 0: proto.LocalSnapshotPbMeta.meta:type_name -> proto.SnapshotMeta
+	4, // 1: proto.LocalSnapshotPbMeta.files:type_name -> proto.LocalSnapshotPbMeta.File
+	6, // 2: proto.LocalSnapshotPbMeta.File.meta:type_name -> proto.LocalFileMeta
 	3, // [3:3] is the sub-list for method output_type
 	3, // [3:3] is the sub-list for method input_type
 	3, // [3:3] is the sub-list for extension type_name

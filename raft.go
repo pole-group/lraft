@@ -1,42 +1,7 @@
-package github
+package lraft
 
-import (
-	"github.com/pole-group/lraft/core"
-	"github.com/pole-group/lraft/entity"
-	"github.com/pole-group/lraft/rafterror"
-	"github.com/pole-group/lraft/storage"
-)
+import "github.com/pole-group/lraft/core"
 
-type Iterator interface {
-	GetData() []byte
-
-	GetIndex() int64
-
-	GetTerm() int64
-
-	Done() core.Closure
-
-	SetErrorAndRollback(nTail int64, st entity.Status)
-}
-
-type StateMachine interface {
-	OnApply(iterator Iterator)
-
-	OnShutdown()
-
-	OnSnapshotSave(writer storage.SnapshotWriter, done core.Closure)
-
-	OnSnapshotLoad(reader storage.SnapshotReader) bool
-
-	OnLeaderStart(term int64)
-
-	OnLeaderStop(status entity.Status)
-
-	OnError(e rafterror.RaftError)
-
-	OnConfigurationCommitted(conf *entity.Configuration)
-
-	OnStopFollowing(ctx entity.LeaderChangeContext)
-
-	OnStartFollowing(ctx entity.LeaderChangeContext)
+func NewRaftNode() core.Node {
+	return nil
 }

@@ -8,7 +8,7 @@
 // 	protoc        v3.12.3
 // source: rpc.proto
 
-package core
+package proto
 
 import (
 	proto "github.com/golang/protobuf/proto"
@@ -1260,33 +1260,33 @@ func file_rpc_proto_rawDescGZIP() []byte {
 
 var file_rpc_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_rpc_proto_goTypes = []interface{}{
-	(*PingRequest)(nil),                // 0: core.PingRequest
-	(*ErrorResponse)(nil),              // 1: core.ErrorResponse
-	(*InstallSnapshotRequest)(nil),     // 2: core.InstallSnapshotRequest
-	(*InstallSnapshotResponse)(nil),    // 3: core.InstallSnapshotResponse
-	(*TimeoutNowRequest)(nil),          // 4: core.TimeoutNowRequest
-	(*TimeoutNowResponse)(nil),         // 5: core.TimeoutNowResponse
-	(*RequestVoteRequest)(nil),         // 6: core.RequestVoteRequest
-	(*RequestVoteResponse)(nil),        // 7: core.RequestVoteResponse
-	(*AppendEntriesRequestHeader)(nil), // 8: core.AppendEntriesRequestHeader
-	(*AppendEntriesRequest)(nil),       // 9: core.AppendEntriesRequest
-	(*AppendEntriesResponse)(nil),      // 10: core.AppendEntriesResponse
-	(*GetFileRequest)(nil),             // 11: core.GetFileRequest
-	(*GetFileResponse)(nil),            // 12: core.GetFileResponse
-	(*ReadIndexRequest)(nil),           // 13: core.ReadIndexRequest
-	(*ReadIndexResponse)(nil),          // 14: core.ReadIndexResponse
-	(*SnapshotMeta)(nil),               // 15: core.SnapshotMeta
-	(*EntryMeta)(nil),                  // 16: core.EntryMeta
+	(*PingRequest)(nil),                // 0: proto.PingRequest
+	(*ErrorResponse)(nil),              // 1: proto.ErrorResponse
+	(*InstallSnapshotRequest)(nil),     // 2: proto.InstallSnapshotRequest
+	(*InstallSnapshotResponse)(nil),    // 3: proto.InstallSnapshotResponse
+	(*TimeoutNowRequest)(nil),          // 4: proto.TimeoutNowRequest
+	(*TimeoutNowResponse)(nil),         // 5: proto.TimeoutNowResponse
+	(*RequestVoteRequest)(nil),         // 6: proto.RequestVoteRequest
+	(*RequestVoteResponse)(nil),        // 7: proto.RequestVoteResponse
+	(*AppendEntriesRequestHeader)(nil), // 8: proto.AppendEntriesRequestHeader
+	(*AppendEntriesRequest)(nil),       // 9: proto.AppendEntriesRequest
+	(*AppendEntriesResponse)(nil),      // 10: proto.AppendEntriesResponse
+	(*GetFileRequest)(nil),             // 11: proto.GetFileRequest
+	(*GetFileResponse)(nil),            // 12: proto.GetFileResponse
+	(*ReadIndexRequest)(nil),           // 13: proto.ReadIndexRequest
+	(*ReadIndexResponse)(nil),          // 14: proto.ReadIndexResponse
+	(*SnapshotMeta)(nil),               // 15: proto.SnapshotMeta
+	(*EntryMeta)(nil),                  // 16: proto.EntryMeta
 }
 var file_rpc_proto_depIdxs = []int32{
-	15, // 0: core.InstallSnapshotRequest.meta:type_name -> core.SnapshotMeta
-	1,  // 1: core.InstallSnapshotResponse.errorResponse:type_name -> core.ErrorResponse
-	1,  // 2: core.TimeoutNowResponse.errorResponse:type_name -> core.ErrorResponse
-	1,  // 3: core.RequestVoteResponse.errorResponse:type_name -> core.ErrorResponse
-	16, // 4: core.AppendEntriesRequest.entries:type_name -> core.EntryMeta
-	1,  // 5: core.AppendEntriesResponse.errorResponse:type_name -> core.ErrorResponse
-	1,  // 6: core.GetFileResponse.errorResponse:type_name -> core.ErrorResponse
-	1,  // 7: core.ReadIndexResponse.errorResponse:type_name -> core.ErrorResponse
+	15, // 0: proto.InstallSnapshotRequest.meta:type_name -> proto.SnapshotMeta
+	1,  // 1: proto.InstallSnapshotResponse.errorResponse:type_name -> proto.ErrorResponse
+	1,  // 2: proto.TimeoutNowResponse.errorResponse:type_name -> proto.ErrorResponse
+	1,  // 3: proto.RequestVoteResponse.errorResponse:type_name -> proto.ErrorResponse
+	16, // 4: proto.AppendEntriesRequest.entries:type_name -> proto.EntryMeta
+	1,  // 5: proto.AppendEntriesResponse.errorResponse:type_name -> proto.ErrorResponse
+	1,  // 6: proto.GetFileResponse.errorResponse:type_name -> proto.ErrorResponse
+	1,  // 7: proto.ReadIndexResponse.errorResponse:type_name -> proto.ErrorResponse
 	8,  // [8:8] is the sub-list for method output_type
 	8,  // [8:8] is the sub-list for method input_type
 	8,  // [8:8] is the sub-list for extension type_name
