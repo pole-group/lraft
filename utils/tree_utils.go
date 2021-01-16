@@ -141,12 +141,12 @@ func (bTree *BinarySearchTree) findMinNode(root *node) *node {
 	return bTree.findMinNode(root.left)
 }
 
-func (bTree *BinarySearchTree) Insert(v interface{}) {
-	bTree.root = bTree.insertVal(v, bTree.root, bTree.root)
+func (bTree *BinarySearchTree) Insert(v interface{}, replaceOld bool) {
+	bTree.root = bTree.insertVal(v, bTree.root, bTree.root, true)
 	bTree.size++
 }
 
-func (bTree *BinarySearchTree) insertVal(v interface{}, root *node, parent *node) *node {
+func (bTree *BinarySearchTree) insertVal(v interface{}, root *node, parent *node, replace bool) *node {
 	if root == nil {
 		return &node{
 			val:    v,
@@ -156,11 +156,13 @@ func (bTree *BinarySearchTree) insertVal(v interface{}, root *node, parent *node
 		}
 	}
 	if bTree.compare(v, root.val) < 0 {
-		root.left = bTree.insertVal(v, root.left, root)
+		root.left = bTree.insertVal(v, root.left, root, replace)
 	} else if bTree.compare(v, root.val) > 0 {
-		root.right = bTree.insertVal(v, root.right, root)
+		root.right = bTree.insertVal(v, root.right, root, replace)
 	}
-	root.val = v
+	if replace {
+		root.val = v
+	}
 	return root
 }
 
@@ -216,21 +218,21 @@ func (bTree *BinarySearchTree) rangeVal(root *node, call func(n *node)) {
 }
 
 type TreeMap struct {
+	BinarySearchTree
 	keyCompare func(a, b interface{}) int
-	bTree      *BinarySearchTree
 }
 
 func NewTreeMap(compare func(a, b interface{}) int) *TreeMap {
 	tMap := &TreeMap{
-		keyCompare: compare,
+		keyCompare: nil,
 	}
-	bTree := NewBinarySearchTree(func(a, b interface{}) int {
+	tMap.compare = func(a, b interface{}) int {
 		aEntry := a.(mapEntry)
 		bEntry := b.(mapEntry)
 		return tMap.keyCompare(aEntry.key, bEntry.key)
-	})
+	}
+	tMap.size = 0
 
-	tMap.bTree = bTree
 	return tMap
 }
 
@@ -244,7 +246,7 @@ func (tMap *TreeMap) Put(key, val interface{}) {
 		key: key,
 		val: val,
 	}
-	tMap.bTree.Insert(entry)
+	tMap.Insert(entry, true)
 }
 
 func (tMap *TreeMap) Get(key interface{}) interface{} {
@@ -252,25 +254,52 @@ func (tMap *TreeMap) Get(key interface{}) interface{} {
 		key: key,
 		val: nil,
 	}
-	n := tMap.bTree.Find(entry)
+	n := tMap.Find(entry)
 	if n == nil {
 		return nil
 	}
 	return n.val.(mapEntry).val
 }
 
-func (tMap *TreeMap) Range(consumer func(k, v interface{})) {
-	tMap.bTree.Range(func(n *node) {
+func (tMap *TreeMap) RangeEntry(consumer func(k, v interface{})) {
+	tMap.Range(func(n *node) {
 		entry := n.val.(mapEntry)
 		consumer(entry.key, entry.val)
 	})
 }
 
+func (tMap *TreeMap) ComputeIfAbsent(key interface{}, supplier func() interface{}) interface{} {
+	keyEntry := mapEntry{
+		key: key,
+		val: nil,
+	}
+	targetEntry := tMap.insertIfValueNotExist(keyEntry, supplier, tMap.root, nil)
+	tMap.size ++
+	return targetEntry.val
+}
+
+func (tMap *TreeMap) insertIfValueNotExist(val mapEntry, supplier func() interface{}, root *node, parent *node) *node {
+	if root == nil {
+		val.val = supplier()
+		return &node{
+			val:    val,
+			parent: parent,
+			left:   nil,
+			right:  nil,
+		}
+	}
+	if tMap.compare(val, root.val) < 0 {
+		root.left = tMap.insertIfValueNotExist(val, supplier, root, parent)
+	} else if tMap.compare(val, root.val) > 0 {
+		root.right = tMap.insertIfValueNotExist(val, supplier, root, parent)
+	}
+	return root
+}
+
 func (tMap *TreeMap) Size() int64 {
-	return tMap.bTree.size
+	return tMap.size
 }
 
 func (tMap *TreeMap) IsEmpty() bool {
-	return tMap.bTree.size == 0
+	return tMap.size == 0
 }
-

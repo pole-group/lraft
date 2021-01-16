@@ -129,7 +129,10 @@ func (iti *IteratorImpl) RunTenRestClosureWithError() {
 	for i := int64(math.Max(float64(iti.currentIndex), float64(iti.firstClosureIndex))); i < iti.committedIndex; i++ {
 		done := iti.closures[i-iti.firstClosureIndex]
 		if done != nil {
-			utils.RequireNonNil(iti.err, "error")
+			if _, err := utils.RequireNonNil(iti.err, "error"); err != nil {
+				done.Run(entity.NewStatus(entity.EINVAL, "impossible run into here"))
+				continue
+			}
 			done.Run(iti.err.Status)
 		}
 	}
@@ -510,6 +513,10 @@ func (fci *FSMCallerImpl) Join() {
 func (fci *FSMCallerImpl) runApplyTask(task *ApplyTask, maxCommittedIndex int64, endOfBatch bool) int64 {
 	var latch *sync.WaitGroup
 	defer func() {
+		if err := recover(); err != nil {
+			// TODO logger.Error()
+		}
+
 		if latch != nil {
 			latch.Done()
 		}
@@ -642,7 +649,9 @@ func (fci *FSMCallerImpl) onTaskCommitted(closures []TaskClosure) {
 }
 
 func (fci *FSMCallerImpl) doSnapshotSave(closure SaveSnapshotClosure) {
-	utils.RequireNonNil(closure, "SaveSnapshotClosure is nil")
+	if _, err := utils.RequireNonNil(closure, "SaveSnapshotClosure is nil"); err != nil {
+		panic(err)
+	}
 	lastAppliedIndex := atomic.LoadInt64(&fci.lastAppliedIndex)
 	snapshotMeta := raft.SnapshotMeta{}
 	snapshotMeta.LastIncludedIndex = lastAppliedIndex
@@ -681,7 +690,9 @@ func (fci *FSMCallerImpl) doSnapshotSave(closure SaveSnapshotClosure) {
 }
 
 func (fci *FSMCallerImpl) doSnapshotLoad(closure LoadSnapshotClosure) {
-	utils.RequireNonNil(closure, "LoadSnapshotClosure is nil")
+	if _, err := utils.RequireNonNil(closure, "LoadSnapshotClosure is nil"); err != nil {
+		panic(err)
+	}
 	reader := closure.Start()
 	if reader == nil {
 		closure.Run(entity.NewStatus(entity.EINVAL, "open SnapshotReader failed"))

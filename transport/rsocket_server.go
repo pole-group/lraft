@@ -102,7 +102,7 @@ func (p *lraftServerTransport) Accept(acceptor transport.ServerTransportAcceptor
 		p.rServer.ConnMgr.PutConn(tp.Connection())
 
 		wrapperOnClose := func(tp *transport.Transport) {
-			p.rServer.ConnMgr.PutConn(tp.Connection())
+			p.rServer.ConnMgr.RemoveConn(tp.Connection())
 			onClose(tp)
 		}
 

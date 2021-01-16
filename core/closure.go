@@ -194,6 +194,7 @@ func NewReadIndexClosure(f func(status entity.Status, index int64, reqCtx []byte
 				if !isOk {
 					return
 				}
+				rc.SetResult(InvalidLogIndex, nil)
 				rc.runUserCallback(entity.NewStatus(entity.ETIMEDOUT, "read-index request timeout"))
 				ticker.Stop()
 			}
@@ -209,7 +210,7 @@ func (rc *ReadIndexClosure) runUserCallback(status entity.Status) {
 			//TODO error log
 		}
 	}()
-	rc.f(status, InvalidLogIndex, nil)
+	rc.f(status, rc.index, rc.requestContext)
 }
 
 func (rc *ReadIndexClosure) SetResult(index int64, reqCtx []byte) {
@@ -298,11 +299,11 @@ const (
 
 type RpcResponseClosure struct {
 	Resp proto.Message
-	F    func(status entity.Status)
+	F    func(resp proto.Message, status entity.Status)
 }
 
 func (rrc *RpcResponseClosure) Run(status entity.Status) {
-	rrc.F(status)
+	rrc.F(rrc.Resp, status)
 }
 
 type RpcRequestClosure struct {
@@ -354,4 +355,8 @@ func (rrc *RpcRequestClosure) Run(status entity.Status) {
 		Label: rpc.CommonRpcErrorCommand,
 		Body:  a,
 	})
+}
+
+type AppendEntriesResponseClosure struct {
+	RpcResponseClosure
 }

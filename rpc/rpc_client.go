@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"net"
 	"sync"
 
 	"github.com/jjeffcaii/reactor-go/mono"
@@ -11,10 +12,11 @@ import (
 	"github.com/pole-group/lraft/transport"
 )
 
-type RpcClient struct {
-	lock    sync.RWMutex
-	sockets map[string]rpcClient
-	openTSL bool
+type RaftClient struct {
+	lock     sync.RWMutex
+	sockets  map[string]rpcClient
+	openTSL  bool
+	watchers []func(con *net.Conn)
 }
 
 type rpcClient struct {
@@ -22,14 +24,20 @@ type rpcClient struct {
 	ctx    context.Context
 }
 
-func NewRaftRPCClient(openTSL bool) *RpcClient {
-	return &RpcClient{
+func NewRaftClient(openTSL bool) *RaftClient {
+	return &RaftClient{
 		sockets: make(map[string]rpcClient),
 		openTSL: openTSL,
 	}
 }
 
-func (c *RpcClient) computeIfAbsent(endpoint entity.Endpoint) {
+func (c *RaftClient) RegisterConnectEventWatcher(watcher func(event transport.ConnectEventType, con net.Conn)) {
+	for _, socket := range c.sockets {
+		socket.client.RegisterConnectEventWatcher(watcher)
+	}
+}
+
+func (c *RaftClient) computeIfAbsent(endpoint entity.Endpoint) {
 	defer c.lock.Unlock()
 	c.lock.Lock()
 
@@ -48,7 +56,7 @@ func (c *RpcClient) computeIfAbsent(endpoint entity.Endpoint) {
 	}
 }
 
-func (c *RpcClient) SendRequest(endpoint entity.Endpoint, req *transport.GrpcRequest) (mono.Mono, error) {
+func (c *RaftClient) SendRequest(endpoint entity.Endpoint, req *transport.GrpcRequest) (mono.Mono, error) {
 	c.computeIfAbsent(endpoint)
 	if rpcC, exist := c.sockets[endpoint.GetDesc()]; exist {
 		return rpcC.client.Request(req)

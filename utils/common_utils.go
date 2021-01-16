@@ -100,17 +100,18 @@ func IF(expression bool, a, b interface{}) interface{} {
 	return b
 }
 
-func RequireNonNil(e interface{}, msg string) interface{} {
+func RequireNonNil(e interface{}, msg string) (interface{}, error) {
 	if e == nil {
-		panic(errors.Errorf(ErrNonNilMsg, msg))
+		return nil, errors.Errorf(ErrNonNilMsg, msg)
 	}
-	return e
+	return e, nil
 }
 
-func RequireTrue(expression bool, format string, args ...interface{}) {
+func RequireTrue(expression bool, format string, args ...interface{}) error {
 	if !expression {
-		panic(errors.Errorf(format, args))
+		return errors.Errorf(format, args)
 	}
+	return nil
 }
 
 func RequireFalse(expression bool, format string, args ...interface{}) {

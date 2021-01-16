@@ -2,6 +2,7 @@ package core
 
 import (
 	"sync"
+	"time"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/ptypes"
@@ -10,7 +11,8 @@ import (
 	"github.com/rsocket/rsocket-go/rx/flux"
 
 	"github.com/pole-group/lraft/entity"
-	"github.com/pole-group/lraft/logger"
+
+	log "github.com/pole-group/lraft/logger"
 	proto2 "github.com/pole-group/lraft/proto"
 	"github.com/pole-group/lraft/rafterror"
 	"github.com/pole-group/lraft/rpc"
@@ -144,15 +146,15 @@ type Node interface {
 type NodeState int
 
 const (
-	StateLeader NodeState = iota
-	StateTransferring
-	StateCandidate
-	StateFollower
-	StateError
-	StateUninitialized
-	StateShutting
-	StateShutdown
-	StateEnd
+	StateLeader        NodeState = iota // It's a leader
+	StateTransferring                   // It's transferring leadership
+	StateCandidate                      //  It's a candidate
+	StateFollower                       // It's a follower
+	StateError                          // It's in error
+	StateUninitialized                  // It's uninitialized
+	StateShutting                       // It's shutting down
+	StateShutdown                       // It's shutdown already
+	StateEnd                            // State end
 )
 
 func (ns NodeState) GetName() string {
@@ -186,7 +188,6 @@ type nodeImpl struct {
 	rwMutex             sync.RWMutex
 	state               NodeState
 	nodeID              entity.NodeId
-	logger              logger.Logger
 	currTerm            int64
 	leaderID            *entity.PeerId
 	firstLogIndex       int64
@@ -194,11 +195,13 @@ type nodeImpl struct {
 	lastLeaderTimestamp int64
 	options             NodeOptions
 	raftOptions         RaftOptions
+	conf                entity.ConfigurationEntry
 	voteCtx             *entity.Ballot
 	preVoteCtx          *entity.Ballot
 	ballotBox           *BallotBox
 	serverID            *entity.PeerId
 	handler             *raftRpcHandler
+	replicatorGroup     *ReplicatorGroup
 	logManager          LogManager
 }
 
@@ -330,6 +333,31 @@ func (ni *nodeImpl) IsCurrentLeaderValid() bool {
 	return utils.GetCurrentTimeMs()-ni.lastLeaderTimestamp < ni.options.ElectionTimeoutMs
 }
 
+func (ni *nodeImpl) IsisLeaderLeaseValid() bool {
+	nowTime := time.Now()
+	if ni.checkLeaderLease(nowTime) {
+		return true
+	}
+	ni.checkDeadNodes0(ni.conf.GetConf().GetPeers(), nowTime, false, nil)
+	return ni.checkLeaderLease(nowTime)
+}
+
+func (ni *nodeImpl) checkLeaderLease(t time.Time) bool {
+	return t.Unix()-ni.lastLeaderTimestamp < int64(ni.options.LeaderLeaseTimeRatio)
+}
+
+func (ni *nodeImpl) checkDeadNodes0(peers *utils.Set, monotonicNowMs time.Time, checkReplicator bool, deadNodes *entity.Configuration) {
+
+}
+
+func (ni *nodeImpl) GetQuorum() int {
+	c := ni.conf.GetConf()
+	if c.IsEmpty() {
+		return 0
+	}
+	return c.GetPeers().Size()/2 + 1
+}
+
 type LeaderStableClosure struct {
 	StableClosure
 	node *nodeImpl
@@ -340,14 +368,14 @@ func (lsc *LeaderStableClosure) Run(status entity.Status) {
 	if status.IsOK() {
 		node.ballotBox.CommitAt(node.firstLogIndex, node.firstLogIndex+int64(node.nEntries)-1, node.serverID)
 	} else {
-		node.logger.Error("Node %s append [%d, %d] failed, status=%+v.", node.nodeID.GetDesc(), node.firstLogIndex, node.firstLogIndex+int64(node.nEntries)-1, status)
+		log.GlobalRaftLog.Error("Node %s append [%d, %d] failed, status=%+v.", node.nodeID.GetDesc(), node.firstLogIndex, node.firstLogIndex+int64(node.nEntries)-1, status)
 	}
 }
 
 type readIndexHeartbeatResponseClosure struct {
-	RpcResponseClosure
+	AppendEntriesResponseClosure
 	readIndexResp      *proto2.ReadIndexResponse
-	closure            *RpcResponseClosure
+	closure            *ReadIndexResponseClosure
 	quorum             int32
 	failPeersThreshold int32
 	ackSuccess         int32
@@ -355,24 +383,52 @@ type readIndexHeartbeatResponseClosure struct {
 	isDone             bool
 }
 
+//NewReadIndexHeartbeatResponseClosure readIndexResp 不涉及网络传输，根据从 Leader 返回的 AppendEntriesResponse 信息决定 readIndexResp
+//的内容是什么
+func NewReadIndexHeartbeatResponseClosure(done *ReadIndexResponseClosure, readIndexResp *proto2.ReadIndexResponse, quorum, peerSize int32) *readIndexHeartbeatResponseClosure {
+	rhc := &readIndexHeartbeatResponseClosure{
+		readIndexResp:      readIndexResp,
+		closure:            done,
+		quorum:             quorum,
+		failPeersThreshold: utils.IF(peerSize%2 == 0, quorum-1, quorum).(int32),
+		ackSuccess:         0,
+		ackFailures:        0,
+		isDone:             false,
+	}
+
+	rhc.AppendEntriesResponseClosure = AppendEntriesResponseClosure{
+		RpcResponseClosure{
+			F: func(resp proto.Message, status entity.Status) {
+				if rhc.isDone {
+					return
+				}
+				if status.IsOK() && resp.(*proto2.AppendEntriesResponse).Success {
+					rhc.ackSuccess++
+				} else {
+					rhc.ackFailures++
+				}
+				_, err := utils.RequireNonNil(rhc.readIndexResp, "ReadIndexResponse")
+				if err != nil {
+					rhc.closure.Run(entity.NewStatus(entity.EInternal, err.Error()))
+					return
+				}
+				if rhc.ackSuccess+1 >= rhc.quorum {
+					rhc.readIndexResp.Success = true
+				} else if rhc.ackFailures >= rhc.failPeersThreshold {
+					rhc.readIndexResp.Success = false
+				}
+				rhc.closure.Resp = rhc.readIndexResp
+				rhc.closure.Run(entity.StatusOK())
+				rhc.isDone = true
+			},
+		},
+	}
+
+	return rhc
+}
+
 func (rhc *readIndexHeartbeatResponseClosure) Run(status entity.Status) {
-	if rhc.isDone {
-		return
-	}
-	if status.IsOK() && rhc.Resp.(*proto2.AppendEntriesResponse).Success {
-		rhc.ackSuccess++
-	} else {
-		rhc.ackFailures++
-	}
-	utils.RequireNonNil(rhc.readIndexResp, "ReadIndexResponse")
-	if rhc.ackSuccess+1 >= rhc.quorum {
-		rhc.readIndexResp.Success = true
-	} else if rhc.ackFailures >= rhc.failPeersThreshold {
-		rhc.readIndexResp.Success = false
-	}
-	rhc.closure.Resp = rhc.readIndexResp
-	rhc.closure.Run(entity.StatusOK())
-	rhc.isDone = true
+	rhc.RpcResponseClosure.Run(status)
 }
 
 type raftRpcHandler struct {
@@ -392,7 +448,7 @@ func (rrh *raftRpcHandler) handlePreVoteRequest() func(input payload.Payload, re
 
 		preVoteReq := req.(*proto2.RequestVoteRequest)
 		if !IsNodeActive(node.state) {
-			node.logger.Warn("Node %s is not in active state, currTerm=%d.", node.nodeID.GetDesc(), node.currTerm)
+			log.GlobalRaftLog.Warn("Node %s is not in active state, currTerm=%d.", node.nodeID.GetDesc(), node.currTerm)
 			voteResp := &proto2.RequestVoteResponse{
 				Term:          0,
 				Granted:       false,
@@ -404,7 +460,8 @@ func (rrh *raftRpcHandler) handlePreVoteRequest() func(input payload.Payload, re
 
 		candidateId := &entity.PeerId{}
 		if !candidateId.Parse(preVoteReq.ServerID) {
-			node.logger.Warn("Node %s received PreVoteRequest from %s serverId bad format.", node.nodeID.GetDesc(), preVoteReq.ServerID)
+			log.GlobalRaftLog.Warn("Node %s received PreVoteRequest from %s serverId bad format.",
+				node.nodeID.GetDesc(), preVoteReq.ServerID)
 			voteResp := &proto2.RequestVoteResponse{
 				Term:          0,
 				Granted:       false,
@@ -416,12 +473,13 @@ func (rrh *raftRpcHandler) handlePreVoteRequest() func(input payload.Payload, re
 		granted := false
 		for {
 			if node.leaderID != nil && !node.leaderID.IsEmpty() && node.IsCurrentLeaderValid() {
-				node.logger.Info("Node %s ignore PreVoteRequest from %s, term=%d, currTerm=%d, because the leader %s's lease is still valid.",
+				log.GlobalRaftLog.Info("Node %s ignore PreVoteRequest from %s, term=%d, currTerm=%d, "+
+					"because the leader %s's lease is still valid.",
 					node.nodeID.GetDesc(), preVoteReq.ServerID, preVoteReq.Term, node.currTerm, node.leaderID.GetDesc())
 				break
 			}
 			if preVoteReq.Term < node.currTerm {
-				node.logger.Info("Node %s ignore PreVoteRequest from %s, term=%d, currTerm=%d.", node.nodeID.GetDesc(), preVoteReq.ServerID, preVoteReq.Term, node.currTerm)
+				log.GlobalRaftLog.Info("Node %s ignore PreVoteRequest from %s, term=%d, currTerm=%d.", node.nodeID.GetDesc(), preVoteReq.ServerID, preVoteReq.Term, node.currTerm)
 				rrh.checkReplicator(candidateId)
 				break
 			} else if preVoteReq.Term == node.currTerm+1 {

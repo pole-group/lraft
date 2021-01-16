@@ -35,6 +35,13 @@ const (
 	TimeFormatStr = "2006-01-02 15:04:05"
 )
 
+var GlobalRaftLog Logger = NewTestRaftLogger("lraft-test")
+
+func InitLRaftLogger(baseDir, name string) {
+	filePath = baseDir
+	GlobalRaftLog = NewRaftLogger(name)
+}
+
 type Logger interface {
 	Debug(format string, args ...interface{})
 
@@ -70,10 +77,6 @@ func init() {
 	utils.CheckErr(err)
 	filePath = filepath.Join(baseDir, "logs")
 	utils.CheckErr(os.MkdirAll(filePath, os.ModePerm))
-}
-
-func LogInit(baseDir string) {
-	filePath = baseDir
 }
 
 func NewTestRaftLogger(name string) Logger {

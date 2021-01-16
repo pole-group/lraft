@@ -52,18 +52,34 @@ func NewDefaultNodeOptions() NodeOptions {
 	}
 }
 
+type ReadOnlyOption string
+
+const (
+	ReadOnlyLeaseBased ReadOnlyOption = "ReadOnlyLeaseBased"
+	ReadOnlySafe       ReadOnlyOption = "ReadOnlySafe"
+)
+
 type RaftOptions struct {
+	ReadOnlyOpt ReadOnlyOption
 }
 
 func (ro RaftOptions) GetMaxReplicatorInflightMsgs() int64 {
 	return 0
 }
 
-type ReplicatorOptions struct {
-}
-
-func (ro ReplicatorOptions) GetDynamicHeartBeatTimeoutMs() int32 {
-	return -1
+type replicatorOptions struct {
+	dynamicHeartBeatTimeoutMs int32
+	electionTimeoutMs         int32
+	groupID                   string
+	serverId                  *entity.PeerId
+	peerId                    *entity.PeerId
+	logMgn                    LogManager
+	ballotBox                 *BallotBox
+	node                      *nodeImpl
+	term                      int64
+	snapshotStorage           SnapshotStorage
+	raftRpcOperator           RaftClientOperator
+	replicatorType            ReplicatorType
 }
 
 type BallotBoxOptions struct {
@@ -80,9 +96,5 @@ type FSMCallerOptions struct {
 	Node          *nodeImpl
 }
 
-
 type SnapshotCopierOptions struct {
-
 }
-
-
