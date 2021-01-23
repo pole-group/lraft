@@ -1,3 +1,7 @@
+// Copyright (c) 2020, pole-group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package core
 
 import (
@@ -143,7 +147,7 @@ func (r *Replicator) GetNextSendIndex() int64 {
 	if r.inFlights.Len() == 0 {
 		return r.nextIndex
 	}
-	if int64(r.inFlights.Len()) > r.raftOptions.GetMaxReplicatorInflightMsgs() {
+	if int64(r.inFlights.Len()) > r.raftOptions.MaxReplicatorInflightMs {
 		return -1
 	}
 	if r.rpcInFly != nil && r.rpcInFly.IsSendingLogEntries() {
@@ -162,9 +166,9 @@ func (r *Replicator) pollInFlight() *InFlight {
 //pollInFlight
 func (r *Replicator) startHeartbeat(startMs int64) {
 	dueTime := startMs + int64(r.options.dynamicHeartBeatTimeoutMs)
-	utils.DoTimerScheduleByOne(context.TODO(), func() {
+	time.AfterFunc(time.Duration(dueTime)*time.Millisecond, func() {
 
-	}, time.Duration(dueTime)*time.Millisecond)
+	})
 }
 
 //installSnapshot 告诉Follower，需要从自己这里拉取snapshot然后在Follower上进行snapshot的load

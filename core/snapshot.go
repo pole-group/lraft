@@ -1,3 +1,7 @@
+// Copyright (c) 2020, pole-group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package core
 
 import (
@@ -23,22 +27,6 @@ type Snapshot interface {
 	ListFiles() []string
 
 	GetFileMeta(fileName string) proto.Message
-}
-
-type SnapshotExecutor interface {
-
-	GetNode() *nodeImpl
-
-	DoSnapshot(done Closure)
-
-	InstallSnapshot(req *raft.InstallSnapshotRequest, done *RpcRequestClosure)
-
-	stopDownloadingSnapshot(newTerm uint64)
-
-	IsInstallingSnapshot() bool
-
-	GetSnapshotStorage() SnapshotStorage
-
 }
 
 type SnapshotReader interface {

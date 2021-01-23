@@ -1,4 +1,4 @@
-// Copyright (c) 2020, Conf-Group. All rights reserved.
+// Copyright (c) 2020, pole-group. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -17,6 +17,37 @@ var (
 const (
 	IndexOutOfBoundErrMsg = "index out of bound, index=%d, offset=%d, pos=%s"
 )
+
+type ConcurrentMap struct {
+	actualMap map[interface{}]interface{}
+	rwLock    sync.RWMutex
+}
+
+func (cm *ConcurrentMap) Put(k, v interface{}) {
+	defer cm.rwLock.Unlock()
+	cm.rwLock.Lock()
+	cm.actualMap[k] = v
+}
+
+func (cm *ConcurrentMap) Remove(k interface{}) {
+	defer cm.rwLock.Unlock()
+	cm.rwLock.Lock()
+	delete(cm.actualMap, k)
+}
+
+func (cm *ConcurrentMap) Get(k interface{}) interface{} {
+	defer cm.rwLock.RUnlock()
+	cm.rwLock.RLock()
+	return cm.actualMap[k]
+}
+
+func (cm *ConcurrentMap) Contains(k interface{}) bool {
+	defer cm.rwLock.RUnlock()
+	cm.rwLock.RLock()
+	_, exist := cm.actualMap[k]
+	return exist
+}
+
 
 type void struct{}
 

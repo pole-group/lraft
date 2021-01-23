@@ -1,3 +1,7 @@
+// Copyright (c) 2020, pole-group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package entity
 
 import (
@@ -19,9 +23,9 @@ func NewEmptyConfiguration() *Configuration {
 	return &Configuration{}
 }
 
-func NewConfiguration(peers, learners []*PeerId) *Configuration {
-	var _peers []*PeerId
-	var _learners []*PeerId
+func NewConfiguration(peers, learners []PeerId) *Configuration {
+	var _peers []PeerId
+	var _learners []PeerId
 
 	for _, e := range peers {
 		_peers = append(_peers, e.Copy())
@@ -37,11 +41,11 @@ func NewConfiguration(peers, learners []*PeerId) *Configuration {
 	}
 }
 
-func (c *Configuration) AddPeers(peers []*PeerId) {
+func (c *Configuration) AddPeers(peers []PeerId) {
 	c.peers.AddAll(peers)
 }
 
-func (c *Configuration) SetPeers(peers []*PeerId) {
+func (c *Configuration) SetPeers(peers []PeerId) {
 	c.peers = utils.NewSetWithValues(peers)
 }
 
@@ -49,12 +53,12 @@ func (c *Configuration) GetPeers() *utils.Set {
 	return c.peers
 }
 
-func (c *Configuration) Contains(id *PeerId) bool {
+func (c *Configuration) Contains(id PeerId) bool {
 	return c.peers.Contain(id)
 }
 
-func (c *Configuration) ListPeers() []*PeerId {
-	ids := make([]*PeerId, 0)
+func (c *Configuration) ListPeers() []PeerId {
+	ids := make([]PeerId, 0)
 	c.peers.ToSlice(ids)
 	return ids
 }
@@ -67,16 +71,16 @@ func (c *Configuration) GetLearners() *utils.Set {
 	return c.learners
 }
 
-func (c *Configuration) SetLearners(learners []*PeerId) {
+func (c *Configuration) SetLearners(learners []PeerId) {
 	c.learners = utils.NewSetWithValues(learners)
 }
 
-func (c *Configuration) AddLearners(learners []*PeerId) {
+func (c *Configuration) AddLearners(learners []PeerId) {
 	c.learners.AddAll(learners)
 }
 
-func (c *Configuration) ListLearners() []*PeerId {
-	ids := make([]*PeerId, 0)
+func (c *Configuration) ListLearners() []PeerId {
+	ids := make([]PeerId, 0)
 	c.learners.ToSlice(ids)
 	return ids
 }
@@ -102,6 +106,10 @@ func (c *Configuration) Rest() {
 
 func (c *Configuration) IsEmpty() bool {
 	return c.peers.Size() == 0
+}
+
+func (c *Configuration) Size() int {
+	return c.peers.Size()
 }
 
 func (c *Configuration) Diff(rhs, included, excluded *Configuration) {
@@ -175,11 +183,11 @@ func (ce *ConfigurationEntry) IsEmpty() bool {
 	return ce.conf == nil || ce.conf.IsEmpty()
 }
 
-func (ce *ConfigurationEntry) ContainPeer(p *PeerId) bool {
+func (ce *ConfigurationEntry) ContainPeer(p PeerId) bool {
 	return ce.conf.Contains(p) || ce.oldConf.Contains(p)
 }
 
-func (ce *ConfigurationEntry) ContainLearner(l *PeerId) bool {
+func (ce *ConfigurationEntry) ContainLearner(l PeerId) bool {
 	return ce.conf.GetLearners().Contain(l) || ce.oldConf.GetLearners().Contain(l)
 }
 

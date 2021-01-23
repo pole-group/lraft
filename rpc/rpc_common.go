@@ -1,3 +1,7 @@
+// Copyright (c) 2020, pole-group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package rpc
 
 import (
@@ -7,9 +11,9 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/jjeffcaii/reactor-go/flux"
 	"github.com/jjeffcaii/reactor-go/mono"
+	pole_rpc "github.com/pole-group/pole-rpc"
 
 	raft "github.com/pole-group/lraft/proto"
-	"github.com/pole-group/lraft/transport"
 )
 
 const (
@@ -31,6 +35,7 @@ const (
 	CoreInstallSnapshotRequest string = "CoreInstallSnapshotCommand"
 	CoreNodeRequest            string = "CoreNodeCommand"
 	CoreReadIndexRequest       string = "CoreReadIndexCommand"
+	CoreRequestPreVoteRequest  string = "CoreRequestPreVoteRequest"
 	CoreRequestVoteRequest     string = "CoreRequestVoteCommand"
 	CoreTimeoutNowRequest      string = "CoreTimeoutNowCommand"
 
@@ -57,7 +62,7 @@ func NewCtxPole() *RpcContext {
 	}
 }
 
-func (c *RpcContext) SendMsg(msg *transport.GrpcResponse) {
+func (c *RpcContext) SendMsg(msg *pole_rpc.ServerResponse) {
 	reqId := c.Value("RequestIDKey").(string)
 	msg.RequestId = reqId
 	if c.onceSink != nil {

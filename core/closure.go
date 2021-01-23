@@ -1,3 +1,7 @@
+// Copyright (c) 2020, pole-group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package core
 
 import (
@@ -9,11 +13,11 @@ import (
 
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/ptypes"
+	polerpc "github.com/pole-group/pole-rpc"
 
 	"github.com/pole-group/lraft/entity"
 	proto2 "github.com/pole-group/lraft/proto"
 	"github.com/pole-group/lraft/rpc"
-	"github.com/pole-group/lraft/transport"
 	"github.com/pole-group/lraft/utils"
 )
 
@@ -55,12 +59,15 @@ func (cq *ClosureQueue) IsEmpty() bool {
 	return cq.queue.Len() == 0
 }
 
-func (cq *ClosureQueue) RestFirstIndex(firstIndex int64) {
+func (cq *ClosureQueue) RestFirstIndex(firstIndex int64) bool {
 	defer cq.lock.Unlock()
 	cq.lock.Lock()
 
-	utils.RequireTrue(cq.queue.Len() == 0, "queue is not empty.")
+	if err := utils.RequireTrue(cq.queue.Len() == 0, "queue is not empty."); err != nil {
+		return false
+	}
 	cq.firstIndex = firstIndex
+	return true
 }
 
 func (cq *ClosureQueue) AppendPendingClosure(closure Closure) {
@@ -185,7 +192,7 @@ func NewReadIndexClosure(f func(status entity.Status, index int64, reqCtx []byte
 
 	ticker := time.NewTicker(timeout)
 
-	utils.NewGoroutine(context.Background(), func(ctx context.Context) {
+	polerpc.Go(context.Background(), func(ctx context.Context) {
 		for {
 			select {
 			case <-ticker.C:
@@ -308,7 +315,7 @@ func (rrc *RpcResponseClosure) Run(status entity.Status) {
 type RpcRequestClosure struct {
 	state       int32
 	rpcCtx      *rpc.RpcContext
-	defaultResp *transport.GrpcResponse
+	defaultResp *polerpc.ServerResponse
 	F           func(status entity.Status)
 }
 
@@ -320,7 +327,7 @@ func NewRpcRequestClosure(rpcCtx *rpc.RpcContext) *RpcRequestClosure {
 	}
 }
 
-func NewRpcRequestClosureWithDefaultResp(rpcCtx *rpc.RpcContext, defaultResp *transport.GrpcResponse) *RpcRequestClosure {
+func NewRpcRequestClosureWithDefaultResp(rpcCtx *rpc.RpcContext, defaultResp *polerpc.ServerResponse) *RpcRequestClosure {
 	return &RpcRequestClosure{
 		state:       RpcPending,
 		rpcCtx:      rpcCtx,
@@ -332,7 +339,7 @@ func (rrc *RpcRequestClosure) GetRpcCtx() *rpc.RpcContext {
 	return rrc.rpcCtx
 }
 
-func (rrc *RpcRequestClosure) SendResponse(msg *transport.GrpcResponse) {
+func (rrc *RpcRequestClosure) SendResponse(msg *polerpc.ServerResponse) {
 	if atomic.CompareAndSwapInt32(&rrc.state, RpcPending, RpcRespond) {
 		rrc.rpcCtx.SendMsg(msg)
 	}
@@ -350,12 +357,24 @@ func (rrc *RpcRequestClosure) Run(status entity.Status) {
 		panic(err)
 	}
 
-	rrc.SendResponse(&transport.GrpcResponse{
-		Label: rpc.CommonRpcErrorCommand,
-		Body:  a,
+	rrc.SendResponse(&polerpc.ServerResponse{
+		FunName: rpc.CommonRpcErrorCommand,
+		Body:    a,
 	})
 }
 
 type AppendEntriesResponseClosure struct {
+	RpcResponseClosure
+}
+
+type RequestVoteResponseClosure struct {
+	RpcResponseClosure
+}
+
+type InstallSnapshotResponseClosure struct {
+	RpcResponseClosure
+}
+
+type TimeoutNowResponseClosure struct {
 	RpcResponseClosure
 }

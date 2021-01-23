@@ -1,0 +1,24 @@
+// Copyright (c) 2020, pole-group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+syntax = "proto3";
+
+import "google/protobuf/any.proto";
+package pole_rpc;
+
+message ServerRequest {
+  string FunName = 1;
+  google.protobuf.Any body = 2;
+  string requestId = 3;
+  map<string, string> header = 4;
+}
+
+message ServerResponse {
+  string FunName = 1;
+  string requestId = 2;
+  map<string, string> header = 5;
+  int32 code = 3;
+  google.protobuf.Any body = 4;
+  string msg = 6;
+}

@@ -1,3 +1,7 @@
+// Copyright (c) 2020, pole-group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package core
 
 import (
@@ -9,7 +13,6 @@ import (
 	"unsafe"
 
 	"github.com/pole-group/lraft/entity"
-	"github.com/pole-group/lraft/logger"
 	raft "github.com/pole-group/lraft/proto"
 	"github.com/pole-group/lraft/utils"
 )
@@ -44,7 +47,7 @@ type Iterator interface {
 
 	Done() Closure
 
-	SetErrorAndRollback(nTail int64, st entity.Status)
+	SetErrorAndRollback(nTail int64, st entity.Status) error
 }
 
 type StateMachine interface {
@@ -102,7 +105,6 @@ func (iti *IteratorImpl) HasError() bool {
 }
 
 func (iti *IteratorImpl) Next() {
-
 	defer func() {
 		if err := recover(); err != nil {
 			iti.err = iti.GetOrCreateError()
@@ -114,8 +116,8 @@ func (iti *IteratorImpl) Next() {
 	iti.currEntry = nil
 	if iti.currentIndex <= iti.committedIndex && iti.currentIndex+1 <= iti.committedIndex {
 		iti.currentIndex++
-		entry := iti.logManager.GetEntry(iti.currentIndex)
-		if entry == nil {
+		iti.currEntry = iti.logManager.GetEntry(iti.currentIndex)
+		if iti.currEntry == nil {
 			iti.err = iti.GetOrCreateError()
 			iti.err.ErrType = raft.ErrorType_ErrorTypeLog
 			iti.err.Status.SetError(-1, "Fail to get entry at index=%d while committed_index=%d", iti.currentIndex, iti.committedIndex)
@@ -137,9 +139,13 @@ func (iti *IteratorImpl) RunTenRestClosureWithError() {
 	}
 }
 
-func (iti *IteratorImpl) SetErrorAndRollback(nTail int64, st *entity.Status) {
-	utils.RequireTrue(nTail > 0, "Invalid nTail=%d", nTail)
+func (iti *IteratorImpl) SetErrorAndRollback(nTail int64, st *entity.Status) error {
+	if err := utils.RequireTrue(nTail > 0, "Invalid nTail=%d", nTail); err != nil {
+		// TODO 有异常需要处理
+		return err
+	}
 	// TODO 回滚个数需要研究
+	// 如果当前的没有 LogEntry 或者不是用户态的数据，则就会会滚对应的 LogEntry 个数，否则需要多会滚一个，因此此时 LogEntry 已经向前推进了
 	if iti.currEntry == nil || iti.currEntry.LogType != raft.EntryType_EntryTypeData {
 		iti.currentIndex -= nTail
 	} else {
@@ -149,6 +155,7 @@ func (iti *IteratorImpl) SetErrorAndRollback(nTail int64, st *entity.Status) {
 	iti.err = iti.GetOrCreateError()
 	iti.err.ErrType = raft.ErrorType_ErrorTypeStateMachine
 	iti.err.Status.SetError(entity.EStateMachine, ErrRollbackMsg, iti.currentIndex, utils.IF(st != nil, st, "none"))
+	return nil
 }
 
 func (iti *IteratorImpl) GetOrCreateError() *entity.RaftError {
@@ -181,6 +188,7 @@ func NewIteratorWrapper(impl *IteratorImpl) *IteratorWrapper {
 	}
 }
 
+//HasNext 只判断当前是否可以进行向前推进一个LogEntry以及当前是否是用户态的数据信息
 func (iw *IteratorWrapper) HasNext() bool {
 	return iw.impl.IsGood() && iw.impl.currEntry.LogType == raft.EntryType_EntryTypeData
 }
@@ -205,8 +213,8 @@ func (iw *IteratorWrapper) Done() Closure {
 	return iw.impl.Done()
 }
 
-func (iw *IteratorWrapper) SetErrorAndRollback(nTail int64, st entity.Status) {
-	iw.impl.SetErrorAndRollback(nTail, &st)
+func (iw *IteratorWrapper) SetErrorAndRollback(nTail int64, st entity.Status) error {
+	return iw.impl.SetErrorAndRollback(nTail, &st)
 }
 
 func (iw *IteratorWrapper) GetData() []byte {
@@ -214,8 +222,8 @@ func (iw *IteratorWrapper) GetData() []byte {
 	return utils.IF(entry != nil, entry.Data, nil).([]byte)
 }
 
-
 type LastAppliedLogIndexListener interface {
+	//OnApplied 监听当前状态机已经将哪一些 core.LogEntry 给 apply 成功了, 这里传入了当前最新的, appliedLogIndex
 	OnApplied(lastAppliedLogIndex int64)
 }
 
@@ -240,7 +248,7 @@ func (at *ApplyTask) Reset() {
 }
 
 func (at *ApplyTask) Name() string {
-	return "github.com/pole-group/lraft/ApplyTask"
+	return "ApplyTask"
 }
 
 func (at *ApplyTask) Sequence() int64 {
@@ -305,7 +313,6 @@ type FSMCallerImpl struct {
 	shutdownLatch                *sync.WaitGroup
 	lastAppliedLogIndexListeners []LastAppliedLogIndexListener
 	applyTaskPool                sync.Pool
-	logger                       logger.Logger
 	handler                      *applyTaskHandler
 	rwMutex                      sync.RWMutex
 	sliceRwMutex                 sync.RWMutex
@@ -324,12 +331,8 @@ func (fci *FSMCallerImpl) Init(ctx context.Context, opt FSMCallerOptions) bool {
 
 	atomic.StoreInt64(&fci.lastAppliedIndex, opt.BootstrapID.GetIndex())
 	atomic.StoreInt64(&fci.lastAppliedTerm, opt.BootstrapID.GetTerm())
-	fci.logger.Info("Starts FSMCaller successfully.")
+	utils.RaftLog.Info("Starts FSMCaller successfully.")
 	return true
-}
-
-func (fci *FSMCallerImpl) SetLogger(logger logger.Logger) {
-	fci.logger = logger
 }
 
 func (fci *FSMCallerImpl) openHandler(ctx context.Context) {
@@ -351,7 +354,7 @@ func (fci *FSMCallerImpl) Shutdown() {
 	if !atomic.CompareAndSwapPointer(&unsafe1, nil, unsafe.Pointer(&sync.WaitGroup{})) {
 		return
 	}
-	fci.logger.Info("Shutting down FSMCaller...")
+	utils.RaftLog.Info("Shutting down FSMCaller...")
 	fci.shutdownLatch.Add(1)
 	at := fci.applyTaskPool.Get().(*ApplyTask)
 	at.Reset()
@@ -377,19 +380,17 @@ func (fci *FSMCallerImpl) enqueueTask(at *ApplyTask) bool {
 	}
 	isOk, err := utils.PublishEventNonBlock(at)
 	if err != nil {
-		re := entity.RaftError{
+		fci.setError(entity.RaftError{
 			ErrType: raft.ErrorType_ErrorTypeStateMachine,
 			Status:  entity.NewStatus(entity.EINTR, err.Error()),
-		}
-		fci.setError(re)
+		})
 		return false
 	}
 	if !isOk {
-		re := entity.RaftError{
+		fci.setError(entity.RaftError{
 			ErrType: raft.ErrorType_ErrorTypeStateMachine,
 			Status:  entity.NewStatus(entity.EBUSY, "FSMCaller is overload."),
-		}
-		fci.setError(re)
+		})
 		return false
 	}
 	return true
@@ -480,7 +481,7 @@ func (fci *FSMCallerImpl) OnStopFollowing(context entity.LeaderChangeContext) bo
 
 func (fci *FSMCallerImpl) OnError(err entity.RaftError) bool {
 	if !fci.error.Status.IsOK() {
-		fci.logger.Warn("FSMCaller already in error status, ignore new error: %s", err.Error())
+		utils.RaftLog.Warn("FSMCaller already in error status, ignore new error: %s", err.Error())
 		return false
 	}
 	closure := &OnErrorClosure{
@@ -513,7 +514,7 @@ func (fci *FSMCallerImpl) runApplyTask(task *ApplyTask, maxCommittedIndex int64,
 	var latch *sync.WaitGroup
 	defer func() {
 		if err := recover(); err != nil {
-			// TODO logger.Error()
+			utils.RaftLog.Error("runApplyTask occur panic error : %s", err)
 		}
 
 		if latch != nil {
@@ -533,7 +534,9 @@ func (fci *FSMCallerImpl) runApplyTask(task *ApplyTask, maxCommittedIndex int64,
 		}
 		switch task.TType {
 		case TaskCommitted:
-			utils.RequireTrue(false, "Impossible")
+			if err := utils.RequireTrue(false, "Impossible"); err != nil {
+				panic(err)
+			}
 		case TaskSnapshotLoad:
 			fci.currTask = TaskSnapshotLoad
 			if fci.passByStatus(task.Done) {
@@ -591,7 +594,14 @@ func (fci *FSMCallerImpl) doCommitted(committedIndex int64) {
 	firstClosureIndex := fci.closureQueue.PopClosureUntil(committedIndex, closures, taskClosures)
 	fci.onTaskCommitted(taskClosures)
 
-	utils.RequireTrue(firstClosureIndex >= 0, "Invalid firstClosureIndex")
+	if err := utils.RequireTrue(firstClosureIndex >= 0, "Invalid firstClosureIndex"); err != nil {
+		fci.error = entity.RaftError{
+			ErrType: raft.ErrorType_ErrorTypeStateMachine,
+			Status:  entity.NewStatus(entity.EStateMachine, err.Error()),
+		}
+		fci.OnError(fci.error)
+		return
+	}
 	iterImpl := &IteratorImpl{
 		fsm:               fci.fsm,
 		logManager:        fci.logManager,
@@ -605,7 +615,9 @@ func (fci *FSMCallerImpl) doCommitted(committedIndex int64) {
 	for iterImpl.IsGood() {
 		logEntry := iterImpl.Entry()
 		lType := logEntry.LogType
-		if lType != raft.EntryType_EntryTypeData {
+		if lType == raft.EntryType_EntryTypeData {
+			fci.doApplyTask(iterImpl)
+		} else {
 			if lType == raft.EntryType_EntryTypeConfiguration {
 				if logEntry.OldPeers != nil && len(logEntry.OldPeers) != 0 {
 					fci.fsm.OnConfigurationCommitted(entity.NewConfiguration(logEntry.Peers, entity.EmptyPeers))
@@ -617,7 +629,6 @@ func (fci *FSMCallerImpl) doCommitted(committedIndex int64) {
 			iterImpl.Next()
 			continue
 		}
-		fci.doApplyTask(iterImpl)
 	}
 	if iterImpl.HasError() {
 		fci.setError(*iterImpl.GetError())
@@ -636,7 +647,7 @@ func (fci *FSMCallerImpl) doApplyTask(impl *IteratorImpl) {
 	iw := NewIteratorWrapper(impl)
 	fci.fsm.OnApply(iw)
 	if iw.HasNext() {
-		fci.logger.Error("Iterator is still valid, did you return before iterator reached the end?")
+		utils.RaftLog.Error("Iterator is still valid, did you return before iterator reached the end?")
 	}
 	iw.Next()
 }
@@ -658,7 +669,7 @@ func (fci *FSMCallerImpl) doSnapshotSave(closure SaveSnapshotClosure) {
 
 	confEntry := fci.logManager.GetConfiguration(lastAppliedIndex)
 	if confEntry == nil || confEntry.IsEmpty() {
-		fci.logger.Error("Empty conf entry for lastAppliedIndex=%d", lastAppliedIndex)
+		utils.RaftLog.Error("Empty conf entry for lastAppliedIndex=%d", lastAppliedIndex)
 		st := entity.NewEmptyStatus()
 		st.SetError(entity.EINVAL, "Empty conf entry for lastAppliedIndex=%d", lastAppliedIndex)
 		closure.Run(st)
@@ -688,6 +699,7 @@ func (fci *FSMCallerImpl) doSnapshotSave(closure SaveSnapshotClosure) {
 	fci.fsm.OnSnapshotSave(writer, closure)
 }
 
+//doSnapshotLoad 加载快照
 func (fci *FSMCallerImpl) doSnapshotLoad(closure LoadSnapshotClosure) {
 	if _, err := utils.RequireNonNil(closure, "LoadSnapshotClosure is nil"); err != nil {
 		panic(err)
@@ -701,45 +713,61 @@ func (fci *FSMCallerImpl) doSnapshotLoad(closure LoadSnapshotClosure) {
 	if snapshotMeta == nil {
 		closure.Run(entity.NewStatus(entity.EINVAL, "SnapshotReader load SnapshotMeta failed"))
 		if reader.Status().GetCode() == entity.EIO {
-			err := entity.RaftError{
+			fci.setError(entity.RaftError{
 				ErrType: raft.ErrorType_ErrorTypeSnapshot,
 				Status:  entity.NewStatus(entity.EIO, "Fail to load snapshot meta"),
-			}
-			fci.setError(err)
+			})
 		}
 		return
 	}
 
 	lastAppliedID := entity.NewLogID(atomic.LoadInt64(&fci.lastAppliedIndex), fci.lastAppliedTerm)
+	// 快照中包含的最后日志条目的索引值以及快照中包含的最后日志条目的任期号
 	snapshotID := entity.NewLogID(snapshotMeta.LastIncludedIndex, snapshotMeta.LastIncludedTerm)
+	// 首先, 快照的最后日志条目的任期必须要大于或者等于本节点的的 Term, 并且 lastAppliedIndex 必须小于等于快照中包含的最后日志条目的索引值
+	// case-one
+	//		如果是自己起来之后，加载自己的快照，如果说不满足这个条件，就会出现，加载完这个过期的快照之后，接下来的 LogEntry 找不到的情况，状态机永远无法继续执行下去
+	// case-two
+	//		如果是接收来自 Leader 的, 那么 Leader 的 lastAppliedIndex 是一定会比自己来的大的，因为只有在 Follower 追随 Leader 的日志太慢的情况下
+	//		Leader 才会主动的触发 Follower 从 Leader 同步快照文件的操作
 	if lastAppliedID.Compare(snapshotID) > 0 {
 		st := entity.NewEmptyStatus()
-		st.SetError(entity.ESTALE, "Loading a stale snapshot last_applied_index=%d last_applied_term=%d snapshot_index=%d snapshot_term=%d", lastAppliedID.GetIndex(), lastAppliedID.GetTerm(), snapshotID.GetIndex(), snapshotID.GetTerm())
+		st.SetError(entity.ESTALE, "Loading a stale snapshot last_applied_index=%d last_applied_term=%d snapshot_index=%d snapshot_term=%d",
+			lastAppliedID.GetIndex(), lastAppliedID.GetTerm(), snapshotID.GetIndex(), snapshotID.GetTerm())
 		closure.Run(st)
 		return
 	}
 
+	// 这里对于用户状态机的快照加载，必须做到阻塞当前状态机的运行
 	if !fci.fsm.OnSnapshotLoad(reader) {
 		closure.Run(entity.NewStatus(-1, "StateMachine onSnapshotLoad failed"))
-		err := entity.RaftError{
+		fci.setError(entity.RaftError{
 			ErrType: raft.ErrorType_ErrorTypeStateMachine,
 			Status:  entity.NewStatus(entity.EStateMachine, "StateMachine onSnapshotLoad failed"),
-		}
-		fci.setError(err)
+		})
 		return
 	}
 
-	oldPeersCnt := len(snapshotMeta.GetOldPeers())
-	if oldPeersCnt == 0 {
+	if oldPeersCnt := len(snapshotMeta.GetOldPeers()); oldPeersCnt == 0 {
 		conf := &entity.Configuration{}
-		peers := make([]*entity.PeerId, oldPeersCnt)
+		peers := make([]entity.PeerId, oldPeersCnt)
 		for i := 0; i < oldPeersCnt; i++ {
-			peer := &entity.PeerId{}
-			utils.RequireTrue(peer.Parse(snapshotMeta.Peers[i]), "Parse peer failed")
+			peer := entity.PeerId{}
+			if err := utils.RequireTrue(peer.Parse(snapshotMeta.Peers[i]), "Parse peer failed"); err != nil {
+				utils.RaftLog.Error("peer parse from snapshot meta failed : %s", err)
+				fci.setError(entity.RaftError{
+					ErrType: raft.ErrorType_ErrorTypeStateMachine,
+					Status:  entity.NewStatus(entity.EStateMachine, "StateMachine onSnapshotLoad failed, "+err.Error()),
+				})
+			}
 			peers[i] = peer
 		}
 		conf.AddPeers(peers)
+		fci.fsm.OnConfigurationCommitted(conf)
 	}
+	atomic.StoreInt64(&fci.lastAppliedIndex, snapshotMeta.LastIncludedIndex)
+	fci.lastAppliedTerm = snapshotMeta.LastIncludedTerm
+	closure.Run(entity.StatusOK())
 }
 
 func (fci *FSMCallerImpl) doLeaderStop(status entity.Status) {
@@ -782,149 +810,3 @@ func (fci *FSMCallerImpl) passByStatus(done Closure) bool {
 }
 
 // FSMCallerImpl end
-
-type BallotBox struct {
-	waiter             FSMCaller
-	closureQueue       *ClosureQueue
-	rwMutex            sync.RWMutex
-	lastCommittedIndex int64
-	pendingIndex       int64
-	pendingMetaQueue   *utils.SegmentList
-}
-
-func (bx *BallotBox) GetPendingIndex() int64 {
-	return bx.pendingIndex
-}
-
-func (bx *BallotBox) GetPendingMetaQueue() *utils.SegmentList {
-	return bx.pendingMetaQueue
-}
-
-func (bx *BallotBox) GetLastCommittedIndex() int64 {
-	defer bx.rwMutex.RUnlock()
-	bx.rwMutex.RLock()
-	return bx.lastCommittedIndex
-}
-
-func (bx *BallotBox) Init(opt BallotBoxOptions) {
-	utils.RequireFalse(opt.Waiter == nil || opt.ClosureQueue == nil, "waiter or closureQueue is nil.")
-	bx.waiter = opt.Waiter
-	bx.closureQueue = opt.ClosureQueue
-}
-
-func (bx *BallotBox) ClearPendingTasks() {
-	defer bx.rwMutex.Unlock()
-	bx.rwMutex.Lock()
-
-	bx.pendingMetaQueue.Clear()
-	bx.pendingIndex = int64(0)
-	bx.closureQueue.Clear()
-}
-
-func (bx *BallotBox) RestPendingIndex(newPendingIndex int64) bool {
-	defer bx.rwMutex.Unlock()
-	bx.rwMutex.Lock()
-
-	isOk := bx.pendingIndex == 0 && bx.closureQueue.IsEmpty()
-	if !isOk {
-		// TODO error log
-		return false
-	}
-	if newPendingIndex < bx.lastCommittedIndex {
-		// TODO error log
-		return false
-	}
-	bx.pendingIndex = newPendingIndex
-	bx.closureQueue.RestFirstIndex(newPendingIndex)
-	return true
-}
-
-func (bx *BallotBox) AppendPendingTask(conf, oldConf *entity.Configuration, done Closure) bool {
-	bl := &entity.Ballot{}
-	isOk := bl.Init(conf, oldConf)
-	if !isOk {
-		// TODO error log
-		return false
-	}
-
-	defer bx.rwMutex.Unlock()
-	bx.rwMutex.Lock()
-
-	if bx.pendingIndex <= 0 {
-		return false
-	}
-	bx.pendingMetaQueue.Add(bl)
-	bx.closureQueue.AppendPendingClosure(done)
-	return true
-}
-
-func (bx *BallotBox) SetLastCommittedIndex(lastCommittedIndex int64) bool {
-	doUnlock := true
-	defer func() {
-		if doUnlock {
-			bx.rwMutex.Unlock()
-		}
-	}()
-
-	bx.rwMutex.Lock()
-	isOk := bx.pendingIndex != 0 && !bx.closureQueue.IsEmpty()
-	if isOk {
-		utils.RequireTrue(lastCommittedIndex < bx.pendingIndex, ErrSetLastCommittedIndex, bx.pendingIndex, lastCommittedIndex)
-		return false
-	}
-	if lastCommittedIndex < bx.lastCommittedIndex {
-		return false
-	}
-	if lastCommittedIndex > bx.lastCommittedIndex {
-		bx.lastCommittedIndex = lastCommittedIndex
-		bx.rwMutex.Unlock()
-		doUnlock = false
-		bx.waiter.OnCommitted(lastCommittedIndex)
-	}
-	return true
-}
-
-// [firstLogIndex, lastLogIndex] commit to stable at peer
-func (bx *BallotBox) CommitAt(firstLogIndex, lastLogIndex int64, peer *entity.PeerId) bool {
-	r := bx.innerCommitAt(firstLogIndex, lastLogIndex, peer)
-	bx.waiter.OnCommitted(bx.lastCommittedIndex)
-	return r
-}
-
-func (bx *BallotBox) innerCommitAt(firstLogIndex, lastLogIndex int64, peer *entity.PeerId) bool {
-	defer bx.rwMutex.Unlock()
-	bx.rwMutex.Lock()
-	lastCommittedIndex := int64(0)
-
-	if bx.pendingIndex == 0 {
-		return false
-	}
-	if lastLogIndex < bx.pendingIndex {
-		return true
-	}
-	if lastLogIndex > bx.pendingIndex+int64(bx.pendingMetaQueue.Size()) {
-		panic(utils.ErrArrayOutOfBound)
-	}
-
-	startAt := int64(math.Max(float64(firstLogIndex), float64(bx.pendingIndex)))
-	hint := entity.PosHint{}
-	for logIndex := startAt; logIndex <= lastLogIndex; logIndex++ {
-		bl := bx.pendingMetaQueue.Get(int32(logIndex - bx.pendingIndex)).(*entity.Ballot)
-		hint = bl.GrantWithHint(peer, hint)
-		if bl.IsGrant() {
-			lastCommittedIndex = logIndex
-		}
-	}
-	if lastCommittedIndex == 0 {
-		return true
-	}
-	bx.pendingMetaQueue.RemoveFromFirst(int32(lastCommittedIndex-bx.pendingIndex) + 1)
-	// TODO debug log
-	bx.pendingIndex = lastCommittedIndex + 1
-	bx.lastCommittedIndex = lastCommittedIndex
-	return true
-}
-
-func (bx *BallotBox) Shutdown() {
-	bx.ClearPendingTasks()
-}

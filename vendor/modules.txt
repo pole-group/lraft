@@ -1,0 +1,79 @@
+# github.com/golang/protobuf v1.4.3
+github.com/golang/protobuf/proto
+github.com/golang/protobuf/ptypes
+github.com/golang/protobuf/ptypes/any
+github.com/golang/protobuf/ptypes/duration
+github.com/golang/protobuf/ptypes/timestamp
+# github.com/google/uuid v1.2.0
+github.com/google/uuid
+# github.com/gorilla/websocket v1.4.2
+github.com/gorilla/websocket
+# github.com/jjeffcaii/reactor-go v0.5.1
+github.com/jjeffcaii/reactor-go
+github.com/jjeffcaii/reactor-go/flux
+github.com/jjeffcaii/reactor-go/hooks
+github.com/jjeffcaii/reactor-go/internal
+github.com/jjeffcaii/reactor-go/internal/buffer
+github.com/jjeffcaii/reactor-go/internal/subscribers
+github.com/jjeffcaii/reactor-go/mono
+github.com/jjeffcaii/reactor-go/scheduler
+github.com/jjeffcaii/reactor-go/tuple
+# github.com/panjf2000/ants/v2 v2.4.3
+github.com/panjf2000/ants/v2
+github.com/panjf2000/ants/v2/internal
+# github.com/pkg/errors v0.9.1
+github.com/pkg/errors
+# github.com/pole-group/pole-rpc v0.0.0-20210122153024-569747cd2b6c
+github.com/pole-group/pole-rpc
+# github.com/rsocket/rsocket-go v0.7.10
+github.com/rsocket/rsocket-go
+github.com/rsocket/rsocket-go/core
+github.com/rsocket/rsocket-go/core/framing
+github.com/rsocket/rsocket-go/core/transport
+github.com/rsocket/rsocket-go/internal/buffer
+github.com/rsocket/rsocket-go/internal/bytesconv
+github.com/rsocket/rsocket-go/internal/common
+github.com/rsocket/rsocket-go/internal/fragmentation
+github.com/rsocket/rsocket-go/internal/misc
+github.com/rsocket/rsocket-go/internal/queue
+github.com/rsocket/rsocket-go/internal/session
+github.com/rsocket/rsocket-go/internal/socket
+github.com/rsocket/rsocket-go/internal/u24
+github.com/rsocket/rsocket-go/lease
+github.com/rsocket/rsocket-go/logger
+github.com/rsocket/rsocket-go/payload
+github.com/rsocket/rsocket-go/rx
+github.com/rsocket/rsocket-go/rx/flux
+github.com/rsocket/rsocket-go/rx/mono
+# go.uber.org/atomic v1.7.0
+go.uber.org/atomic
+# google.golang.org/protobuf v1.25.0
+google.golang.org/protobuf/encoding/prototext
+google.golang.org/protobuf/encoding/protowire
+google.golang.org/protobuf/internal/descfmt
+google.golang.org/protobuf/internal/descopts
+google.golang.org/protobuf/internal/detrand
+google.golang.org/protobuf/internal/encoding/defval
+google.golang.org/protobuf/internal/encoding/messageset
+google.golang.org/protobuf/internal/encoding/tag
+google.golang.org/protobuf/internal/encoding/text
+google.golang.org/protobuf/internal/errors
+google.golang.org/protobuf/internal/fieldsort
+google.golang.org/protobuf/internal/filedesc
+google.golang.org/protobuf/internal/filetype
+google.golang.org/protobuf/internal/flags
+google.golang.org/protobuf/internal/genid
+google.golang.org/protobuf/internal/impl
+google.golang.org/protobuf/internal/mapsort
+google.golang.org/protobuf/internal/pragma
+google.golang.org/protobuf/internal/set
+google.golang.org/protobuf/internal/strs
+google.golang.org/protobuf/internal/version
+google.golang.org/protobuf/proto
+google.golang.org/protobuf/reflect/protoreflect
+google.golang.org/protobuf/reflect/protoregistry
+google.golang.org/protobuf/runtime/protoiface
+google.golang.org/protobuf/runtime/protoimpl
+google.golang.org/protobuf/types/known/anypb
+google.golang.org/protobuf/types/known/durationpb
+google.golang.org/protobuf/types/known/timestamppb

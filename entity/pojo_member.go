@@ -1,3 +1,7 @@
+// Copyright (c) 2020, pole-group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package entity
 
 import (
@@ -8,12 +12,12 @@ import (
 	"github.com/pole-group/lraft/utils"
 )
 
-type ElectionPriority int64
+type ElectionPriority int16
 
-var (
-	Disabled   = ElectionPriority(-1)
-	NotElected = ElectionPriority(0)
-	MinValue   = ElectionPriority(1)
+const (
+	ElectionPriorityDisabled   = ElectionPriority(-1)
+	ElectionPriorityNotElected = ElectionPriority(0)
+	ElectionPriorityMinValue   = ElectionPriority(1)
 )
 
 type Endpoint struct {
@@ -54,7 +58,7 @@ func (e Endpoint) Equal(other Endpoint) bool {
 	return strings.Compare(e.ip, other.ip) == 0 && e.port == other.port
 }
 
-var EmptyPeers = make([]*PeerId, 0)
+var EmptyPeers = make([]PeerId, 0)
 
 type PeerId struct {
 	endpoint Endpoint
@@ -62,6 +66,18 @@ type PeerId struct {
 	priority ElectionPriority
 	checksum uint64
 	desc     string
+}
+
+var EmptyPeer = PeerId{
+	endpoint: Endpoint{
+		ip:   "-1",
+		port: -1,
+		desc: "",
+	},
+	idx:      -1,
+	priority: -1,
+	checksum: 0,
+	desc:     "",
 }
 
 func NewPeerId(endpoint Endpoint, idx int64, priority ElectionPriority) *PeerId {
@@ -74,20 +90,24 @@ func NewPeerId(endpoint Endpoint, idx int64, priority ElectionPriority) *PeerId 
 	}
 }
 
-func (p *PeerId) GetIP() string {
+func (p PeerId) GetPriority() ElectionPriority {
+	return p.priority
+}
+
+func (p PeerId) GetIP() string {
 	return p.endpoint.ip
 }
 
-func (p *PeerId) GetPort() int64 {
+func (p PeerId) GetPort() int64 {
 	return p.endpoint.port
 }
 
-func (p *PeerId) GetEndpoint() Endpoint {
+func (p PeerId) GetEndpoint() Endpoint {
 	return p.endpoint
 }
 
-func (p *PeerId) Copy() *PeerId {
-	return &PeerId{
+func (p PeerId) Copy() PeerId {
+	return PeerId{
 		endpoint: p.endpoint,
 		idx:      p.idx,
 		priority: p.priority,
@@ -96,7 +116,7 @@ func (p *PeerId) Copy() *PeerId {
 	}
 }
 
-func (p *PeerId) Parse(s string) bool {
+func (p PeerId) Parse(s string) bool {
 	if s == "" {
 		return false
 	}
@@ -122,7 +142,7 @@ func (p *PeerId) Parse(s string) bool {
 	return true
 }
 
-func (p *PeerId) Checksum() uint64 {
+func (p PeerId) Checksum() uint64 {
 	str := p.GetDesc()
 	if p.checksum == 0 {
 		p.checksum = utils.Checksum([]byte(str))
@@ -130,7 +150,7 @@ func (p *PeerId) Checksum() uint64 {
 	return p.checksum
 }
 
-func (p *PeerId) GetDesc() string {
+func (p PeerId) GetDesc() string {
 	if p.desc != "" {
 		return p.desc
 	}
@@ -138,7 +158,7 @@ func (p *PeerId) GetDesc() string {
 	if p.idx != 0 {
 		p.desc += ":" + strconv.FormatInt(p.idx, 10)
 	}
-	if p.priority != Disabled {
+	if p.priority != ElectionPriorityDisabled {
 		if p.priority == 0 {
 			p.desc += ":"
 		}
@@ -147,29 +167,29 @@ func (p *PeerId) GetDesc() string {
 	return p.desc
 }
 
-func (p *PeerId) IsPriorityNotElected() bool {
-	return p.priority == NotElected
+func (p PeerId) IsPriorityNotElected() bool {
+	return p.priority == ElectionPriorityNotElected
 }
 
-func (p *PeerId) IsPriorityDisabled() bool {
-	return p.priority == Disabled
+func (p PeerId) IsPriorityDisabled() bool {
+	return p.priority == ElectionPriorityDisabled
 }
 
-func (p *PeerId) IsEmpty() bool {
-	return strings.Compare(utils.IPAny, p.endpoint.ip) == 0 && p.endpoint.port == 0 && p.idx == 0
+func (p PeerId) IsEmpty() bool {
+	return strings.Compare("-1", p.endpoint.ip) == 0 && p.endpoint.port == -1 && p.idx == -1
 }
 
-func (p *PeerId) Equal(other *PeerId) bool {
+func (p PeerId) Equal(other PeerId) bool {
 	return p.endpoint.Equal(other.endpoint) && p.idx == other.idx && p.priority == other.priority
 }
 
-func (p *PeerId) Encode() []byte {
+func (p PeerId) Encode() []byte {
 	b, err := json.Marshal(p)
 	utils.CheckErr(err)
 	return b
 }
 
-func (p *PeerId) Decode(b []byte) {
+func (p PeerId) Decode(b []byte) {
 	err := json.Unmarshal(b, p)
 	utils.CheckErr(err)
 }
