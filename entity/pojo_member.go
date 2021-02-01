@@ -15,6 +15,7 @@ import (
 type ElectionPriority int16
 
 const (
+	ElectionPriorityMin        = ElectionPriority(-64)
 	ElectionPriorityDisabled   = ElectionPriority(-1)
 	ElectionPriorityNotElected = ElectionPriority(0)
 	ElectionPriorityMinValue   = ElectionPriority(1)

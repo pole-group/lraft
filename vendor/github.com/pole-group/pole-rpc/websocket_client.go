@@ -41,7 +41,6 @@ func (rpc *webSocketRpcContext) Send(req *ServerRequest) {
 }
 
 type WebSocketClient struct {
-	repository    EndpointRepository
 	lock          sync.RWMutex
 	clientMap     map[string]*websocket.Conn
 	supplier      func(endpoint Endpoint) (*websocket.Conn, error)
@@ -51,10 +50,9 @@ type WebSocketClient struct {
 	done          chan bool
 }
 
-func newWebSocketClient(openTSL bool, repository EndpointRepository) (*WebSocketClient, error) {
+func newWebSocketClient(openTSL bool) (*WebSocketClient, error) {
 	wsc := &WebSocketClient{
 		lock:          sync.RWMutex{},
-		repository:    repository,
 		clientMap:     make(map[string]*websocket.Conn),
 		bc:            newBaseClient(),
 		future:        make(map[string]mono.Sink),
@@ -127,10 +125,18 @@ func (wsc *WebSocketClient) AddChain(filter func(req *ServerRequest)) {
 	wsc.bc.AddChain(filter)
 }
 
-func (wsc *WebSocketClient) Request(ctx context.Context, name string, req *ServerRequest) (*ServerResponse, error) {
+func (wsc *WebSocketClient) CheckConnection(endpoint Endpoint) (bool, error)  {
+	conn, err := wsc.computeIfAbsent(endpoint)
+	if err != nil {
+		return false, err
+	}
+	return conn.RemoteAddr() != nil, nil
+}
+
+func (wsc *WebSocketClient) Request(ctx context.Context, endpoint Endpoint, req *ServerRequest) (*ServerResponse, error) {
 	wsc.bc.DoFilter(req)
 
-	conn, err := wsc.computeIfAbsent(name)
+	conn, err := wsc.computeIfAbsent(endpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -155,9 +161,9 @@ func (wsc *WebSocketClient) Request(ctx context.Context, name string, req *Serve
 	return resp.(*ServerResponse), nil
 }
 
-func (wsc *WebSocketClient) RequestChannel(ctx context.Context, name string, call UserCall) (RpcClientContext, error) {
+func (wsc *WebSocketClient) RequestChannel(ctx context.Context, endpoint Endpoint, call UserCall) (RpcClientContext, error) {
 
-	conn, err := wsc.computeIfAbsent(name)
+	conn, err := wsc.computeIfAbsent(endpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -198,12 +204,7 @@ func (wsc *WebSocketClient) Close() error {
 	return nil
 }
 
-func (wsc *WebSocketClient) computeIfAbsent(name string) (*websocket.Conn, error) {
-	success, endpoint := wsc.repository.SelectOne(name)
-	if !success {
-		return nil, fmt.Errorf("can't find endpoint by name : %s", name)
-	}
-
+func (wsc *WebSocketClient) computeIfAbsent(endpoint Endpoint) (*websocket.Conn, error) {
 	var wClient *websocket.Conn
 	wsc.lock.RLock()
 	if v, exist := wsc.clientMap[endpoint.GetKey()]; exist {

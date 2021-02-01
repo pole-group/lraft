@@ -29,8 +29,8 @@ type rpcClient struct {
 	ctx    context.Context
 }
 
-func NewRaftClient(openTSL bool, repository polerpc.EndpointRepository) (*RaftClient, error) {
-	client, err := polerpc.NewTransportClient(polerpc.ConnectTypeRSocket, repository, openTSL)
+func NewRaftClient(openTSL bool) (*RaftClient, error) {
+	client, err := polerpc.NewTransportClient(polerpc.ConnectTypeRSocket, openTSL)
 	if err != nil {
 		return nil, err
 	}
@@ -46,9 +46,17 @@ func (c *RaftClient) RegisterConnectEventWatcher(watcher func(event polerpc.Conn
 }
 
 func (c *RaftClient) SendRequest(endpoint entity.Endpoint, req *polerpc.ServerRequest) (*polerpc.ServerResponse, error) {
-	return c.client.Request(context.Background(), endpoint.GetDesc(), req)
+	return c.client.Request(context.Background(), polerpc.Endpoint{
+		Key:  "",
+		Host: endpoint.GetIP(),
+		Port: int32(endpoint.GetPort()),
+	}, req)
 }
 
-func (c *RaftClient) CheckConnection(endpoint entity.Endpoint) bool {
-	return true
+func (c *RaftClient) CheckConnection(endpoint entity.Endpoint) (bool, error) {
+	return c.client.CheckConnection(polerpc.Endpoint{
+		Key:  "",
+		Host: endpoint.GetIP(),
+		Port: int32(endpoint.GetPort()),
+	})
 }

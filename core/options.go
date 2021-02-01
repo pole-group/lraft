@@ -75,6 +75,10 @@ func NewDefaultNodeOptions() NodeOptions {
 	}
 }
 
+func (opts NodeOptions) getLeaderLeaseTimeoutMs() int64 {
+	return opts.ElectionTimeoutMs * int64(opts.LeaderLeaseTimeRatio) / 100
+}
+
 type ReadOnlyOption string
 
 const (
@@ -99,7 +103,7 @@ type replicatorOptions struct {
 	node                      *nodeImpl
 	term                      int64
 	snapshotStorage           SnapshotStorage
-	raftRpcOperator           RaftClientOperator
+	raftRpcOperator           *RaftClientOperator
 	replicatorType            ReplicatorType
 }
 

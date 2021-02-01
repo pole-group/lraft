@@ -22,24 +22,29 @@ import (
 )
 
 type RSocketClient struct {
-	supplier   func(endpoint Endpoint) (rsocket.Client, error)
-	repository EndpointRepository
-	rwLock     sync.RWMutex
-	sockets    map[string]rsocket.Client
-	bc         *BaseTransportClient
+	supplier func(endpoint Endpoint) (*proxyRSocketClient, error)
+	rwLock   sync.RWMutex
+	sockets  map[string]*proxyRSocketClient
+	bc       *BaseTransportClient
+}
+
+type proxyRSocketClient struct {
+	conn net.Conn
+	rc   rsocket.Client
 }
 
 //TODO 后续改造成为 Option 的模式
-func newRSocketClient(openTSL bool, repository EndpointRepository) (*RSocketClient, error) {
+func newRSocketClient(openTSL bool) (*RSocketClient, error) {
 
 	client := &RSocketClient{
-		rwLock:     sync.RWMutex{},
-		sockets:    make(map[string]rsocket.Client),
-		bc:         newBaseClient(),
-		repository: repository,
+		rwLock:  sync.RWMutex{},
+		sockets: make(map[string]*proxyRSocketClient),
+		bc:      newBaseClient(),
 	}
 
-	supplier := func(endpoint Endpoint) (rsocket.Client, error) {
+	supplier := func(endpoint Endpoint) (*proxyRSocketClient, error) {
+		pc := &proxyRSocketClient{}
+
 		c, err := rsocket.Connect().
 			OnClose(func(err error) {
 				defer client.rwLock.Unlock()
@@ -72,11 +77,15 @@ func newRSocketClient(openTSL bool, repository EndpointRepository) (*RSocketClie
 					Conn:      conn,
 				}
 
+				pc.conn = conn
+
 				trp := transport.NewTCPClientTransport(conn)
 				return trp, err
 			}).
 			Start(context.Background())
-		return c, err
+
+		pc.rc = c
+		return pc, err
 	}
 
 	client.supplier = supplier
@@ -91,19 +100,27 @@ func (c *RSocketClient) AddChain(filter func(req *ServerRequest)) {
 	c.bc.AddChain(filter)
 }
 
-func (c *RSocketClient) Request(ctx context.Context, name string, req *ServerRequest) (*ServerResponse, error) {
+func (c *RSocketClient) CheckConnection(endpoint Endpoint) (bool, error) {
+	conn, err := c.computeIfAbsent(endpoint)
+	if err != nil {
+		return false, err
+	}
+	return conn.conn.RemoteAddr() != nil, nil
+}
+
+func (c *RSocketClient) Request(ctx context.Context, endpoint Endpoint, req *ServerRequest) (*ServerResponse, error) {
 	c.bc.DoFilter(req)
 	body, err := proto.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
 
-	client, err := c.computeIfAbsent(name)
+	pc, err := c.computeIfAbsent(endpoint)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := client.RequestResponse(payload.New(body, EmptyBytes)).
+	resp, err := pc.rc.RequestResponse(payload.New(body, EmptyBytes)).
 		Raw().
 		FlatMap(func(any reactorM.Any) reactorM.
 		Mono {
@@ -120,8 +137,8 @@ func (c *RSocketClient) Request(ctx context.Context, name string, req *ServerReq
 	return resp.(*ServerResponse), nil
 }
 
-func (c *RSocketClient) RequestChannel(ctx context.Context, name string, call UserCall) (RpcClientContext, error) {
-	client, err := c.computeIfAbsent(name)
+func (c *RSocketClient) RequestChannel(ctx context.Context, endpoint Endpoint, call UserCall) (RpcClientContext, error) {
+	pc, err := c.computeIfAbsent(endpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +157,7 @@ func (c *RSocketClient) RequestChannel(ctx context.Context, name string, call Us
 		return payload.New(body, EmptyBytes), nil
 	})
 
-	client.RequestChannel(flux.Raw(f)).DoOnNext(func(output payload.Payload) error {
+	pc.rc.RequestChannel(flux.Raw(f)).DoOnNext(func(output payload.Payload) error {
 		resp := new(ServerResponse)
 		if err := proto.Unmarshal(output.Data(), resp); err != nil {
 			call(nil, err)
@@ -165,18 +182,13 @@ func (c *RSocketClient) RequestChannel(ctx context.Context, name string, call Us
 
 func (c *RSocketClient) Close() error {
 	for _, socket := range c.sockets {
-		_ = socket.Close()
+		_ = socket.rc.Close()
 	}
 	return nil
 }
 
-func (c *RSocketClient) computeIfAbsent(name string) (rsocket.Client, error) {
-	success, endpoint := c.repository.SelectOne(name)
-	if !success {
-		return nil, fmt.Errorf("can't find target endpoint by service-name : %s", name)
-	}
-
-	var rClient rsocket.Client
+func (c *RSocketClient) computeIfAbsent(endpoint Endpoint) (*proxyRSocketClient, error) {
+	var rClient *proxyRSocketClient
 	c.rwLock.RLock()
 	if v, exist := c.sockets[endpoint.GetKey()]; exist {
 		rClient = v

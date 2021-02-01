@@ -241,14 +241,14 @@ func (rc *ReadIndexClosure) Run(status entity.Status) {
 
 type CatchUpClosure struct {
 	maxMargin   int64
-	ctx         context.Context
+	future      utils.Future
 	errorWasSet bool
 	status      entity.Status
-	f           func(status entity.Status)
+	F           func(status entity.Status)
 }
 
 func (cuc *CatchUpClosure) Run(status entity.Status) {
-	cuc.f(status)
+	cuc.F(status)
 }
 
 func (cuc *CatchUpClosure) GetMaxMargin() int64 {
@@ -259,8 +259,8 @@ func (cuc *CatchUpClosure) SetMaxMargin(maxMargin int64) {
 	cuc.maxMargin = maxMargin
 }
 
-func (cuc *CatchUpClosure) GetCtx() context.Context {
-	return cuc.ctx
+func (cuc *CatchUpClosure) GetFuture() utils.Future {
+	return cuc.future
 }
 
 func (cuc *CatchUpClosure) IsErrorWasSet() bool {
@@ -361,6 +361,23 @@ func (rrc *RpcRequestClosure) Run(status entity.Status) {
 		FunName: rpc.CommonRpcErrorCommand,
 		Body:    a,
 	})
+}
+
+type OnPreVoteRpcDone struct {
+	RpcResponseClosure
+	PeerId    entity.PeerId
+	Term      int64
+	StartTime time.Time
+	Req       *proto2.RequestVoteRequest
+}
+
+type OnRequestVoteRpcDone struct {
+	RpcResponseClosure
+	PeerId    entity.PeerId
+	Term      int64
+	StartTime time.Time
+	node      *nodeImpl
+	Req       *proto2.RequestVoteRequest
 }
 
 type AppendEntriesResponseClosure struct {

@@ -5,7 +5,6 @@
 package core
 
 import (
-	"context"
 	"fmt"
 	"math"
 	"math/rand"
@@ -13,7 +12,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/golang/protobuf/proto"
+
 	"github.com/pole-group/lraft/entity"
+	raft "github.com/pole-group/lraft/proto"
 	"github.com/pole-group/lraft/utils"
 
 	polerpc "github.com/pole-group/pole-rpc"
@@ -26,54 +28,106 @@ const (
 	Suspend
 )
 
+type JobType int32
+
+const (
+	JobForVote JobType = iota
+	JobForElection
+	JobForSnapshot
+	JobForStepDown
+)
+
 type repeatJob interface {
 	//start 任务启动
 	start()
-	//restart 任务重启
-	restart()
 	//stop 任务不执行
 	stop()
-	//shutdown 任务关闭
-	shutdown()
 }
 
 type RaftNodeJobManager struct {
-	electionChan chan int8
-	voteJob      repeatJob
-	electionJob  repeatJob
+	node        *nodeImpl
+	voteJob     repeatJob
+	electionJob repeatJob
+	stepDownJob repeatJob
+	snapshotJob repeatJob
 }
 
-func (mgn *RaftNodeJobManager) start() {
+func NewRaftNodeJobManager(node *nodeImpl) *RaftNodeJobManager {
+	mgn := &RaftNodeJobManager{
+		node: node,
+	}
 
+	mgn.electionJob = newElector(node, mgn)
+	mgn.snapshotJob = newSnapshotJob(node, mgn)
+	mgn.voteJob = newVoteJob(node, mgn)
+	mgn.stepDownJob = newStepDownJob(node, mgn)
+	return mgn
+}
+
+func (mgn *RaftNodeJobManager) startJob(jType JobType) {
+	switch jType {
+	case JobForVote:
+		if mgn.voteJob != nil {
+			mgn.voteJob.start()
+		}
+	case JobForElection:
+		if mgn.electionJob != nil {
+			mgn.electionJob.start()
+		}
+	case JobForSnapshot:
+		if mgn.snapshotJob != nil {
+			mgn.snapshotJob.start()
+		}
+	case JobForStepDown:
+		if mgn.stepDownJob != nil {
+			mgn.stepDownJob.start()
+		}
+	}
+}
+
+func (mgn *RaftNodeJobManager) stopJob(jType JobType) {
+	switch jType {
+	case JobForVote:
+		if mgn.voteJob != nil {
+			mgn.voteJob.stop()
+		}
+	case JobForElection:
+		if mgn.electionJob != nil {
+			mgn.electionJob.stop()
+		}
+	case JobForSnapshot:
+		if mgn.snapshotJob != nil {
+			mgn.snapshotJob.stop()
+		}
+	case JobForStepDown:
+		if mgn.stepDownJob != nil {
+			mgn.stepDownJob.stop()
+		}
+	}
 }
 
 func (mgn *RaftNodeJobManager) shutdown() {
-	close(mgn.electionChan)
-	mgn.voteJob.shutdown()
-	mgn.electionJob.shutdown()
+	mgn.voteJob.stop()
+	mgn.snapshotJob.stop()
+	mgn.electionJob.stop()
+	mgn.stepDownJob.stop()
 }
 
 type VoteJob struct {
 	jobMgn   *RaftNodeJobManager
 	node     *nodeImpl
 	lock     *sync.RWMutex
-	cancelF  context.CancelFunc
-	ctx      context.Context
+	future   polerpc.Future
 	stopSign JobSwitch
 }
 
-func (v *VoteJob) initVoteJob() {
-	ctx, cancelF := context.WithCancel(context.Background())
-	v.ctx = ctx
-	v.cancelF = cancelF
-
-	polerpc.DoTimerSchedule(ctx, func() {
-		if atomic.LoadInt32((*int32)(&v.stopSign)) == int32(OpenJob) {
-			v.handleVoteTimeout()
-		}
-	}, time.Duration(v.node.options.ElectionTimeoutMs)*time.Millisecond, func() time.Duration {
-		return time.Duration(v.node.options.ElectionTimeoutMs+rand.Int63n(v.node.options.ElectionMaxDelayMs)) * time.Millisecond
-	})
+func newVoteJob(node *nodeImpl, mgn *RaftNodeJobManager) *VoteJob {
+	return &VoteJob{
+		jobMgn:   mgn,
+		node:     node,
+		lock:     node.lock,
+		stopSign: 0,
+	}
 }
 
 func (v *VoteJob) start() {
@@ -81,34 +135,40 @@ func (v *VoteJob) start() {
 	v.initVoteJob()
 }
 
-func (v *VoteJob) restart() {
-	atomic.StoreInt32((*int32)(&v.stopSign), int32(OpenJob))
-}
-
 func (v *VoteJob) stop() {
 	atomic.StoreInt32((*int32)(&v.stopSign), int32(Suspend))
+	v.future.Cancel()
 }
 
-func (v *VoteJob) shutdown() {
-	v.stop()
-	v.cancelF()
+// initVoteJob 初始化投票的定时任务
+func (v *VoteJob) initVoteJob() {
+	v.future = polerpc.DoTimerSchedule(func() {
+		// 如果当前任务可执行的状态依旧 open 状态的话，则继续执行处理
+		if atomic.LoadInt32((*int32)(&v.stopSign)) == int32(OpenJob) {
+			// 如果到了指定的超时时间
+			v.handleVoteTimeout()
+		}
+	}, time.Duration(v.node.options.ElectionTimeoutMs)*time.Millisecond, func() time.Duration {
+		return time.Duration(v.node.options.ElectionTimeoutMs+rand.Int63n(v.node.options.ElectionMaxDelayMs)) * time.Millisecond
+	})
 }
 
 //handleVoteTimeout 投票超时任务处理，在规定的时间范围内没有收集到足够多的票数让自己成为 Leader
 func (v *VoteJob) handleVoteTimeout() {
 	v.lock.Lock()
+	// 如果自己的状态没有成为 Candidate，则不能开启自己竞选 Leader 的动作
 	if v.node.state != StateCandidate {
 		v.lock.Unlock()
 		return
 	}
 
 	if v.node.raftOptions.StepDownWhenVoteTimeout {
-		stepDown(v.node.currTerm, false, entity.NewStatus(entity.ETIMEDOUT,
+		stepDown(v.node, v.node.currTerm, false, entity.NewStatus(entity.ETIMEDOUT,
 			"vote timeout: fail to get quorum vote-granted"))
 		doPreVote(v.node)
 	} else {
 		utils.RaftLog.Debug("node %s term %d retry to vote self", v.node.nodeID.GetDesc(), v.node.currTerm)
-		v.jobMgn.electionChan <- int8(1)
+		electSelf(v.node)
 	}
 }
 
@@ -117,43 +177,38 @@ type ElectionJob struct {
 	node        *nodeImpl
 	electionCnt int32
 	lock        *sync.RWMutex
-	cancelF     context.CancelFunc
-	ctx         context.Context
 	stopSign    JobSwitch
+	future      polerpc.Future
 }
 
-func newElector(node *nodeImpl) *ElectionJob {
+func newElector(node *nodeImpl, mgn *RaftNodeJobManager) *ElectionJob {
 	return &ElectionJob{
-		node: node,
-		lock: node.rwMutex,
+		jobMgn: mgn,
+		node:   node,
+		lock:   node.lock,
 	}
 }
 
+func (el *ElectionJob) start() {
+	atomic.StoreInt32((*int32)(&el.stopSign), int32(OpenJob))
+	el.initElectionJob()
+}
+
+func (el *ElectionJob) stop() {
+	atomic.StoreInt32((*int32)(&el.stopSign), int32(Suspend))
+	el.future.Cancel()
+}
+
+//initElectionJob 处理来自 Leader 的心跳包数据，判断如果 Leader 超过多久没有向自己续约 Leader 信息的话，就会开启 preVote 机制先判断是否可以竞争 Leader
+//，同时由于是采用了 preVote，避免了 term 可能会疯狂上涨的问题
 func (el *ElectionJob) initElectionJob() {
-	ctx, cancelF := context.WithCancel(context.Background())
-	el.ctx = ctx
-	el.cancelF = cancelF
-
-	polerpc.GoEmpty(func() {
-		for range el.jobMgn.electionChan {
-			el.electSelf()
-		}
-	})
-
-	polerpc.DoTimerSchedule(ctx, func() {
+	el.future = polerpc.DoTimerSchedule(func() {
 		if atomic.LoadInt32((*int32)(&el.stopSign)) == int32(OpenJob) {
 			el.handleElectionTimeout()
 		}
 	}, time.Duration(el.node.options.ElectionTimeoutMs)*time.Millisecond, func() time.Duration {
 		return time.Duration(el.node.options.ElectionTimeoutMs+rand.Int63n(el.node.options.ElectionMaxDelayMs)) * time.Millisecond
 	})
-
-	el.lock.Lock()
-	if el.node.conf.IsStable() && el.node.conf.GetConf().Size() == 1 && el.node.conf.ContainPeer(el.node.serverID) {
-		el.jobMgn.electionChan <- int8(1)
-	} else {
-		el.lock.Unlock()
-	}
 }
 
 //handleElectionTimeout 接收到 Leader 心跳包的时间超时了, 自己可以向其他节点发起投票请求, 竞争成为 Leader 节点
@@ -169,7 +224,9 @@ func (el *ElectionJob) handleElectionTimeout() {
 	if el.node.state != StateFollower {
 		return
 	}
-	if el.node.IsCurrentLeaderValid() {
+
+	// 当前 Leader 在自己这里的租约是否过期了
+	if el.node.currentLeaderIsValid() {
 		return
 	}
 
@@ -177,11 +234,14 @@ func (el *ElectionJob) handleElectionTimeout() {
 	el.node.resetLeaderId(entity.EmptyPeer, entity.NewStatus(entity.ERaftTimedOut,
 		fmt.Sprintf("lost connection from leader %s", el.node.leaderID.GetDesc())))
 
+	// 判断当前自己是否可以进行 Leader 的竞选
 	if !el.allowLaunchElection() {
 		return
 	}
-	doPreVote(el.node)
 	doUnlock = false
+
+	// 开始做预投票
+	doPreVote(el.node)
 }
 
 func (el *ElectionJob) allowLaunchElection() bool {
@@ -217,37 +277,14 @@ func (el *ElectionJob) decayTargetPriority() {
 		el.node.targetPriority)
 }
 
-func (el *ElectionJob) start() {
-	atomic.StoreInt32((*int32)(&el.stopSign), int32(OpenJob))
-	el.initElectionJob()
-}
-
-func (el *ElectionJob) restart() {
-	atomic.StoreInt32((*int32)(&el.stopSign), int32(OpenJob))
-}
-
-func (el *ElectionJob) stop() {
-	atomic.StoreInt32((*int32)(&el.stopSign), int32(Suspend))
-}
-
-func (el *ElectionJob) shutdown() {
-	el.stop()
-	el.cancelF()
-}
-
-func (el *ElectionJob) electSelf() {
-
-}
-
 type SnapshotJob struct {
 	firstSchedule bool
 	jobMgn        *RaftNodeJobManager
 	node          *nodeImpl
 	lock          *sync.RWMutex
-	cancelF       context.CancelFunc
-	ctx           context.Context
 	stopSign      JobSwitch
 	snapshotSign  chan int8
+	future        polerpc.Future
 }
 
 func newSnapshotJob(node *nodeImpl, mgn *RaftNodeJobManager) repeatJob {
@@ -255,9 +292,7 @@ func newSnapshotJob(node *nodeImpl, mgn *RaftNodeJobManager) repeatJob {
 		firstSchedule: true,
 		jobMgn:        mgn,
 		node:          node,
-		lock:          node.rwMutex,
-		cancelF:       nil,
-		ctx:           nil,
+		lock:          node.lock,
 		stopSign:      0,
 		snapshotSign:  make(chan int8, 1),
 	}
@@ -265,9 +300,6 @@ func newSnapshotJob(node *nodeImpl, mgn *RaftNodeJobManager) repeatJob {
 
 //start 任务启动
 func (sj *SnapshotJob) start() {
-	ctx, cancelF := context.WithCancel(context.Background())
-	sj.ctx = ctx
-	sj.cancelF = cancelF
 	atomic.StoreInt32((*int32)(&sj.stopSign), int32(OpenJob))
 
 	polerpc.GoEmpty(func() {
@@ -276,7 +308,7 @@ func (sj *SnapshotJob) start() {
 		}
 	})
 
-	polerpc.DoTimerSchedule(ctx, func() {
+	sj.future = polerpc.DoTimerSchedule(func() {
 		if atomic.LoadInt32((*int32)(&sj.stopSign)) == int32(OpenJob) {
 			sj.handleSnapshotTimeout()
 		}
@@ -294,20 +326,11 @@ func (sj *SnapshotJob) start() {
 	})
 }
 
-//restart 任务重启
-func (sj *SnapshotJob) restart() {
-	atomic.StoreInt32((*int32)(&sj.stopSign), int32(OpenJob))
-}
-
 //stop 任务不执行
 func (sj *SnapshotJob) stop() {
 	atomic.StoreInt32((*int32)(&sj.stopSign), int32(Suspend))
-}
-
-//shutdown 任务关闭
-func (sj *SnapshotJob) shutdown() {
-	sj.stop()
-	sj.cancelF()
+	close(sj.snapshotSign)
+	sj.future.Cancel()
 }
 
 func (sj *SnapshotJob) handleSnapshotTimeout() {
@@ -320,19 +343,315 @@ func (sj *SnapshotJob) handleSnapshotTimeout() {
 	sj.snapshotSign <- int8(1)
 }
 
+type StepDownJob struct {
+	node   *nodeImpl
+	jogMgn *RaftNodeJobManager
+	lock   *sync.RWMutex
+}
+
+func newStepDownJob(node *nodeImpl, mgn *RaftNodeJobManager) *StepDownJob {
+	return &StepDownJob{
+		node:   node,
+		jogMgn: mgn,
+		lock:   node.lock,
+	}
+}
+
+//start 任务启动
+func (sj *StepDownJob) start() {
+
+}
+
+//stop 任务不执行
+func (sj *StepDownJob) stop() {
+
+}
+
+//electSelf 通过 preVote 之后，就开始真正的将自己的term上调并进行Leader的竞选
+func electSelf(node *nodeImpl) {
+	utils.RaftLog.Info("node %s startJob vote and grant vote self, term=%d.", node.nodeID.GetDesc(), node.currTerm)
+
+	startVote := func() (bool, int64) {
+		defer node.lock.Unlock()
+		// 自己不再集群列表里面，不可以发起选举！
+		if !node.conf.ContainPeer(node.serverID) {
+			utils.RaftLog.Warn("node %s can't do electSelf as it is not in %#v.", node.nodeID.GetDesc(), node.conf)
+			return false, -1
+		}
+
+		if node.state == StateFollower {
+			utils.RaftLog.Debug("node %s stop election timer, term=%d", node.nodeID.GetDesc(), node.currTerm)
+			node.raftNodeJobMgn.stopJob(JobForElection)
+		}
+		// 因为自己的状态提升为了 StateCandidate，因此自己不认当前的 Leader，直接将自己原来记住的 Leader 信息丢弃
+		node.resetLeaderId(entity.EmptyPeer, entity.NewStatus(entity.ERaftTimedOut,
+			"a follower's leader_id is reset to NULL as it begins to request_vote."))
+		node.state = StateCandidate
+		node.currTerm++
+		// 将票投给自己
+		node.votedId = node.serverID.Copy()
+		utils.RaftLog.Debug("node %s startJob vote timer, term=%d", node.nodeID.GetDesc(), node.currTerm)
+
+		// 开启 vote 的超时计算任务，自己必须在规定的时间内获取到半数投票才可以
+		node.raftNodeJobMgn.startJob(JobForVote)
+
+		var oldConf *entity.Configuration
+		if !node.conf.IsStable() {
+			oldConf = node.conf.GetOldConf()
+		}
+
+		node.voteCtx.Init(node.conf.GetConf(), oldConf)
+		return true, node.currTerm
+	}
+
+	isGoon, oldTerm := startVote()
+	if !isGoon {
+		return
+	}
+
+	// 在准备发起投票时，必须确保自己的已经接收到 Log 都已经持久化到磁盘了，这个时候才可以去获取 <term, logIndex> 信息
+	lastLogId := node.logManager.GetLastLogID(true)
+
+	defer node.lock.Unlock()
+	node.lock.Lock()
+
+	if node.currTerm != oldTerm {
+		utils.RaftLog.Warn("node %s raise term {} when getLastLogId.", node.nodeID.GetDesc())
+		return
+	}
+	node.conf.ListPeers().Range(func(value interface{}) {
+		peer := value.(entity.PeerId)
+		if peer.Equal(node.serverID) {
+			return
+		}
+		if ok, err := node.raftOperator.raftClient.CheckConnection(peer.GetEndpoint()); !ok || err != nil {
+			utils.RaftLog.Warn("node %s channel init failed, address=%s", node.nodeID.GetDesc(), peer.GetEndpoint().GetDesc())
+			return
+		}
+		done := &OnRequestVoteRpcDone{
+			PeerId:    peer,
+			Term:      node.currTerm,
+			node:      node,
+			StartTime: time.Now(),
+			Req: &raft.RequestVoteRequest{
+				GroupID:      node.groupID,
+				ServerID:     node.serverID.GetDesc(),
+				PeerID:       peer.GetDesc(),
+				Term:         node.currTerm,
+				LastLogTerm:  lastLogId.GetTerm(),
+				LastLogIndex: lastLogId.GetIndex(),
+				PreVote:      false,
+			},
+		}
+
+		done.F = func(resp proto.Message, status entity.Status) {
+			if status.IsOK() {
+				handleRequestVoteResponse(done.PeerId, done.Term, done.Resp.(*raft.RequestVoteResponse))
+			} else {
+				utils.RaftLog.Warn("node : %s request vote to : %s error : %s", node.nodeID.GetDesc(),
+					done.PeerId.GetDesc(), status.GetMsg())
+			}
+		}
+		node.raftOperator.RequestVote(peer.GetEndpoint(), done.Req, done)
+	})
+
+	// 保存元数据信息
+	node.metaStorage.setTermAndVotedFor(node.currTerm, node.serverID)
+	node.voteCtx.Grant(node.serverID)
+	// 如果当前已经有超过半数的 Follower 同意了自己的 Leader 竞争选举，那么就正式成为 Leader
+	if node.voteCtx.IsGrant() {
+		becomeLeader(node)
+	}
+}
+
 //doPreVote 为了避免 Term 因为选举失败而导致不堵上涨的问题，这里做了优化，采用预投票的方式，先试探一下自己是否可以竞争为 Leader,
 //如果可以的话, 在执行真正的 Vote 机制
 func doPreVote(node *nodeImpl) {
+	utils.RaftLog.Info("node : %s term : %d startJob preVote", node.nodeID.GetDesc(), node.currTerm)
+	if node.snapshotExecutor != nil && node.snapshotExecutor.IsInstallingSnapshot() {
+		utils.RaftLog.Warn("node : %s term : %d doesn't do preVote when installing snapshot as the configuration may" +
+			" be out of date")
+		return
+	}
+	if !node.conf.ContainPeer(node.serverID) {
+		return
+	}
+	oldTerm := node.currTerm
+	node.lock.Unlock()
+
+	lastLogId := node.logManager.GetLastLogID(true)
+	doUnlock := true
+
+	defer func() {
+		if doUnlock {
+			node.lock.Unlock()
+		}
+	}()
+	node.lock.Lock()
+
+	if oldTerm != node.currTerm {
+		utils.RaftLog.Warn("node : %s raise term : %d when get lastLogId", node.nodeID.GetDesc(), node.currTerm)
+		return
+	}
+	var oldConf *entity.Configuration
+	if node.conf.IsStable() {
+		oldConf = node.conf.GetOldConf()
+	}
+	node.preVoteCtx.Init(node.conf.GetConf(), oldConf)
+	node.conf.ListPeers().Range(func(value interface{}) {
+		peer := value.(entity.PeerId)
+		if peer.Equal(node.serverID) {
+			return
+		}
+		if ok, err := node.raftOperator.raftClient.CheckConnection(peer.GetEndpoint()); !ok || err != nil {
+			utils.RaftLog.Warn("node %s channel init failed, address=%s", node.nodeID.GetDesc(), peer.GetEndpoint().GetDesc())
+			return
+		}
+		done := &OnPreVoteRpcDone{
+			PeerId:    peer,
+			Term:      node.currTerm,
+			StartTime: time.Now(),
+			Req: &raft.RequestVoteRequest{
+				GroupID:      node.groupID,
+				ServerID:     node.serverID.GetDesc(),
+				PeerID:       peer.GetDesc(),
+				Term:         node.currTerm + 1,
+				LastLogTerm:  lastLogId.GetTerm(),
+				LastLogIndex: lastLogId.GetIndex(),
+				PreVote:      true,
+			},
+		}
+
+		done.F = func(resp proto.Message, status entity.Status) {
+			if status.IsOK() {
+				handlePreVoteResponse(node, done.PeerId, done.Term, done.Resp.(*raft.RequestVoteResponse))
+			} else {
+				utils.RaftLog.Warn("node : %s pre vote to : %s error : %s", node.nodeID.GetDesc(),
+					done.PeerId.GetDesc(), status.GetMsg())
+			}
+		}
+
+		node.raftOperator.PreVote(peer.GetEndpoint(), done.Req, done)
+	})
+	node.preVoteCtx.Grant(node.serverID)
+	if node.preVoteCtx.IsGrant() {
+		doUnlock = false
+		electSelf(node)
+	}
+}
+
+// handleRequestVoteResponse
+func handleRequestVoteResponse(peer entity.PeerId, term int64, resp *raft.RequestVoteResponse) {
 
 }
 
-func stepDown(term int64, wakeupCandidate bool, status entity.Status) {
+// handlePreVoteResponse
+func handlePreVoteResponse(node *nodeImpl, peer entity.PeerId, term int64, resp *raft.RequestVoteResponse) {
+	doUnlock := true
 
+	defer func() {
+		if doUnlock {
+			node.lock.Unlock()
+		}
+	}()
+
+	node.lock.Lock()
+
+	if node.state != StateFollower {
+		utils.RaftLog.Warn("Node %s received invalid PreVoteResponse from %s, state not in StateFollower but %s.",
+			node.nodeID.GetDesc(), peer.GetDesc(), node.state.GetName())
+		return
+	}
+
+	if term != node.currTerm {
+		return
+	}
+	if resp.Term > term {
+		stepDown(node, resp.Term, false, entity.NewStatus(entity.EHigherTermResponse,
+			"Raft node receives higher term pre_vote_response."))
+		return
+	}
+	if resp.Granted {
+		node.preVoteCtx.Grant(peer)
+		if node.preVoteCtx.IsGrant() {
+			doUnlock = false
+			electSelf(node)
+		}
+	}
+}
+
+// stepDown 停止自己的一些任务，只有在出现状态转换的时候需要做这个动作，并且是从 Leader 降级为 Follower
+func stepDown(node *nodeImpl, term int64, wakeupCandidate bool, status entity.Status) {
+	if !IsNodeActive(node.state) {
+		return
+	}
+
+	// 自己处于 Candidate 状态的时候，就不能够在进行投票的操作了
+	if node.state == StateCandidate {
+		node.raftNodeJobMgn.stopJob(JobForVote)
+	} else if node.state <= StateTransferring {
+		node.raftNodeJobMgn.stopJob(JobForStepDown)
+		node.ballotBox.ClearPendingTasks()
+		if node.state == StateLeader {
+			node.onLeaderStop(status)
+		}
+	}
+	// 自己不是Leader了，清空自己的 Leader 信息数据，并将自己的状态更改为 Follower
+	node.resetLeaderId(entity.EmptyPeer, status)
+	node.state = StateFollower
+	// 清空自己的配置信息，这个信息只能以 Leader 的为准
+	node.confCtx.Reset()
+	node.lastLeaderTimestamp = utils.GetCurrentTimeMs()
+	if node.snapshotExecutor != nil {
+		node.snapshotExecutor.stopDownloadingSnapshot(term)
+	}
+	if term > node.currTerm {
+		node.currTerm = term
+		node.votedId = entity.EmptyPeer
+		node.metaStorage.setTermAndVotedFor(term, node.votedId)
+	}
+
+	if wakeupCandidate {
+		node.wakingCandidate = node.replicatorGroup.stopAllAndFindTheNextCandidate(node.conf)
+		if node.wakingCandidate != nil {
+			node.replicatorGroup.sendTimeoutNowAndStop(node.wakingCandidate, node.options.ElectionTimeoutMs)
+		}
+	} else {
+		node.replicatorGroup.stopAll()
+	}
+	if node.stopTransferArg != nil {
+		if node.transferFuture != nil {
+			node.transferFuture.Cancel()
+		}
+		node.stopTransferArg = nil
+	}
+	if !node.IsLearner() {
+		node.raftNodeJobMgn.startJob(JobForElection)
+	} else {
+		utils.RaftLog.Info("node %s is a learner, election timer is not started.", node.nodeID.GetDesc())
+	}
 }
 
 func becomeLeader(node *nodeImpl) {
-	jobMgn := node.raftNodeJobMgn
-	jobMgn.voteJob.stop()
+	if err := utils.RequireTrue(node.state == StateCandidate, "illegal state %s", node.state.GetName()); err != nil {
+		panic(err)
+	}
+	utils.RaftLog.Info("node %s become leader of group, term=%d, conf=%#v, oldConf=%#v.", node.nodeID.GetDesc(),
+		node.currTerm, node.conf.GetConf(), node.conf.GetOldConf())
+	node.raftNodeJobMgn.stopJob(JobForVote)
+	node.state = StateLeader
+	node.leaderID = node.serverID.Copy()
+	node.replicatorGroup.resetTerm(node.currTerm)
+
+	node.conf.ListPeers().Range(func(value interface{}) {
+		peer := value.(entity.PeerId)
+		if peer.Equal(node.serverID) {
+			return
+		}
+		if success, err := node.replicatorGroup.AddReplicator(peer, ReplicatorFollower, true); !success || err != nil {
+			utils.RaftLog.Error("fail to add a replicator, peer %s, err %s", peer.GetDesc(), err)
+		}
+	})
 }
 
 func doSnapshot(node *nodeImpl, done Closure) {

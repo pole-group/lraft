@@ -402,24 +402,28 @@ func (le *LogEntry) checksumPeers(peers []PeerId, c uint64) uint64 {
 	return c
 }
 
+func IsEmptyNodeID(nodeId NodeId) bool {
+	return nodeId.GroupID == "" && nodeId.Peer.IsEmpty()
+}
+
 type NodeId struct {
 	GroupID string
 	Peer    PeerId
 	desc    string
 }
 
-func (n *NodeId) GetDesc() string {
+func (n NodeId) GetDesc() string {
 	if n.desc == "" {
 		n.desc = "<" + n.GroupID + "/" + n.Peer.GetDesc() + ">"
 	}
 	return n.desc
 }
 
-func (n *NodeId) Equal(other *NodeId) bool {
+func (n NodeId) Equal(other NodeId) bool {
 	if n == other {
 		return true
 	}
-	if other == nil {
+	if IsEmptyNodeID(other) {
 		return false
 	}
 	a := strings.Compare(n.GroupID, other.GroupID) == 0

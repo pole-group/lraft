@@ -89,7 +89,7 @@ func (se *SnapshotExecutor) InstallSnapshot(req *raft.InstallSnapshotRequest, do
 
 }
 
-func (se *SnapshotExecutor) stopDownloadingSnapshot(newTerm uint64) {
+func (se *SnapshotExecutor) stopDownloadingSnapshot(newTerm int64) {
 
 }
 

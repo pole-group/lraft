@@ -47,6 +47,7 @@ func mustExecute(sc scheduler.Scheduler, handler func()) {
 
 // DuplexConnection represents a socket of RSocket which can be a requester or a responder.
 type DuplexConnection struct {
+	ctx            context.Context
 	reqSche        scheduler.Scheduler
 	resSche        scheduler.Scheduler
 	destroyReqSche bool
@@ -114,8 +115,16 @@ func (dc *DuplexConnection) Close() error {
 	dc.cond.Broadcast()
 	dc.cond.L.Unlock()
 
+	var writeDone chan struct{}
+
+	dc.locker.RLock()
+	writeDone = dc.writeDone
+	dc.locker.RUnlock()
+
 	// wait for write loop end
-	<-dc.writeDone
+	if writeDone != nil {
+		<-dc.writeDone
+	}
 
 	dc.destroyTransport()
 
@@ -496,7 +505,7 @@ func (dc *DuplexConnection) RequestChannel(sending flux.Flux) (ret flux.Flux) {
 				rcv:          receiving,
 				result:       sendResult,
 			}
-			sending.SubscribeOn(dc.reqSche).SubscribeWith(context.Background(), sub)
+			sending.SubscribeOn(dc.reqSche).SubscribeWith(dc.ctx, sub)
 		})
 	return ret
 }
@@ -543,11 +552,11 @@ func (dc *DuplexConnection) respondRequestResponse(receiving fragmentation.Heade
 	// async subscribe publisher
 	sub := borrowRequestResponseSubscriber(dc, sid, receiving)
 	if mono.IsSubscribeAsync(sending) {
-		sending.SubscribeWith(context.Background(), sub)
+		sending.SubscribeWith(dc.ctx, sub)
 		return nil
 	}
 	mustExecute(dc.resSche, func() {
-		sending.SubscribeWith(context.Background(), sub)
+		sending.SubscribeWith(dc.ctx, sub)
 	})
 	return nil
 }
@@ -651,7 +660,7 @@ func (dc *DuplexConnection) respondRequestChannel(req fragmentation.HeaderAndPay
 	}
 
 	mustExecute(dc.reqSche, func() {
-		sending.SubscribeWith(context.Background(), sub)
+		sending.SubscribeWith(dc.ctx, sub)
 	})
 
 	<-subscribed
@@ -753,7 +762,7 @@ func (dc *DuplexConnection) respondRequestStream(receiving fragmentation.HeaderA
 
 	// async subscribe publisher
 	sub := borrowRequestStreamSubscriber(receiving, dc, sid, n)
-	sending.SubscribeOn(dc.resSche).SubscribeWith(context.Background(), sub)
+	sending.SubscribeOn(dc.resSche).SubscribeWith(dc.ctx, sub)
 	return nil
 }
 
@@ -1264,6 +1273,13 @@ func (dc *DuplexConnection) loopWriteWithKeepaliver(ctx context.Context, leaseCh
 
 // LoopWrite start write loop
 func (dc *DuplexConnection) LoopWrite(ctx context.Context) error {
+	// init write done chan
+	dc.locker.Lock()
+	if dc.writeDone == nil {
+		dc.writeDone = make(chan struct{})
+	}
+	dc.locker.Unlock()
+
 	defer close(dc.writeDone)
 
 	var leaseChan chan lease.Lease
@@ -1329,16 +1345,16 @@ func IsSocketClosedError(err error) bool {
 }
 
 // NewServerDuplexConnection creates a new server-side DuplexConnection.
-func NewServerDuplexConnection(reqSche, resSche scheduler.Scheduler, mtu int, leases lease.Factory) *DuplexConnection {
-	return newDuplexConnection(reqSche, resSche, mtu, nil, &serverStreamIDs{}, leases)
+func NewServerDuplexConnection(ctx context.Context, reqSche, resSche scheduler.Scheduler, mtu int, leases lease.Factory) *DuplexConnection {
+	return newDuplexConnection(ctx, reqSche, resSche, mtu, nil, &serverStreamIDs{}, leases)
 }
 
 // NewClientDuplexConnection creates a new client-side DuplexConnection.
-func NewClientDuplexConnection(reqSche, resSche scheduler.Scheduler, mtu int, keepaliveInterval time.Duration) *DuplexConnection {
-	return newDuplexConnection(reqSche, resSche, mtu, NewKeepaliver(keepaliveInterval), &clientStreamIDs{}, nil)
+func NewClientDuplexConnection(ctx context.Context, reqSche, resSche scheduler.Scheduler, mtu int, keepaliveInterval time.Duration) *DuplexConnection {
+	return newDuplexConnection(ctx, reqSche, resSche, mtu, NewKeepaliver(keepaliveInterval), &clientStreamIDs{}, nil)
 }
 
-func newDuplexConnection(reqSche, resSche scheduler.Scheduler, mtu int, ka *Keepaliver, sids StreamID, leases lease.Factory) *DuplexConnection {
+func newDuplexConnection(ctx context.Context, reqSche, resSche scheduler.Scheduler, mtu int, ka *Keepaliver, sids StreamID, leases lease.Factory) *DuplexConnection {
 	destroyReqSche := reqSche == nil
 	if destroyReqSche {
 		reqSche = scheduler.NewElastic(misc.MaxInt(runtime.NumCPU()<<8, _minRequestSchedulerSize))
@@ -1348,6 +1364,7 @@ func newDuplexConnection(reqSche, resSche scheduler.Scheduler, mtu int, ka *Keep
 	}
 
 	c := &DuplexConnection{
+		ctx:            ctx,
 		reqSche:        reqSche,
 		resSche:        resSche,
 		destroyReqSche: destroyReqSche,
@@ -1357,7 +1374,6 @@ func newDuplexConnection(reqSche, resSche scheduler.Scheduler, mtu int, ka *Keep
 		messages:       newMap32(),
 		sids:           sids,
 		fragments:      newMap32(),
-		writeDone:      make(chan struct{}),
 		counter:        core.NewTrafficCounter(),
 		keepaliver:     ka,
 		closed:         atomic.NewBool(false),

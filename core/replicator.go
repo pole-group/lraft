@@ -6,17 +6,18 @@ package core
 
 import (
 	"container/list"
-	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	polerpc "github.com/pole-group/pole-rpc"
 
 	"github.com/pole-group/lraft/entity"
 	raft "github.com/pole-group/lraft/proto"
 	"github.com/pole-group/lraft/utils"
 
 	"github.com/golang/protobuf/proto"
-	"github.com/jjeffcaii/reactor-go/mono"
 )
 
 type RunningState int
@@ -40,9 +41,9 @@ const (
 type ReplicatorEvent int
 
 const (
-	Created ReplicatorEvent = iota
-	Error
-	Destroyed
+	ReplicatorCreatedEvent ReplicatorEvent = iota
+	ReplicatorErrorEvent
+	ReplicatorDestroyedEvent
 )
 
 type RequestType int
@@ -72,7 +73,7 @@ type InFlight struct {
 	reqCnt     int32
 	startIndex int64
 	size       int32
-	future     mono.Mono
+	future     polerpc.Future
 	reqType    RequestType
 	seq        int64
 }
@@ -102,7 +103,7 @@ type Replicator struct {
 	hasSucceeded           bool
 	consecutiveErrorTimes  int64
 	timeoutNowIndex        int64
-	lastRPCSendTimestamp   int64
+	lastRpcSendTimestamp   int64
 	heartbeatCounter       int64
 	appendEntriesCounter   int64
 	installSnapshotCounter int64
@@ -112,16 +113,40 @@ type Replicator struct {
 	requiredNextSeq        int64
 	version                int32
 	seqGenerator           int64
+	waitId                 int64
 	rpcInFly               *InFlight
-	inFlights              list.List
-	options                replicatorOptions
+	inFlights              list.List // <*InFlight>
+	options                *replicatorOptions
 	raftOptions            RaftOptions
-	heartbeatInFly         mono.Mono
-	timeoutNowInFly        mono.Mono
+	heartbeatInFly         polerpc.Future
+	timeoutNowInFly        polerpc.Future
+	destroy                bool
+	futures                *polerpc.ConcurrentSlice
 }
 
-func (r *Replicator) Start() {
+func NewReplicator(opts *replicatorOptions, raftOpts RaftOptions) *Replicator {
+	return &Replicator{
+		lock:         &sync.Mutex{},
+		options:      opts,
+		raftOptions:  raftOpts,
+		nextIndex:    opts.logMgn.GetLastLogIndex() + 1,
+		raftOperator: opts.raftRpcOperator,
+		futures:      &polerpc.ConcurrentSlice{},
+	}
+}
 
+func (r *Replicator) Start() (bool, error) {
+	if ok, err := r.raftOperator.raftClient.CheckConnection(r.options.peerId.GetEndpoint()); !ok || err != nil {
+		utils.RaftLog.Error("fail init sending channel to %s", r.options.peerId.GetDesc())
+		return ok, err
+	}
+	r.lock.Lock()
+	notifyReplicatorStatusListener(r, ReplicatorCreatedEvent, entity.NewEmptyStatus())
+	utils.RaftLog.Info("replicator=%#v@%s is started", r, r.options.peerId.GetDesc())
+	r.lastRpcSendTimestamp = utils.GetCurrentTimeMs()
+	r.startHeartbeat(utils.GetCurrentTimeMs())
+	r.sendEmptyEntries(false, nil)
+	return true, nil
 }
 
 func (r *Replicator) Stop() {
@@ -129,14 +154,15 @@ func (r *Replicator) Stop() {
 }
 
 //AddInFlights
-func (r *Replicator) AddInFlights(reqType RequestType, startIndex int64, cnt, size int32, seq int64, rpcInfly mono.Mono) {
+func (r *Replicator) AddInFlights(reqType RequestType, startIndex int64, cnt, size int32, seq int64,
+	rpcInFly polerpc.Future) {
 	r.rpcInFly = &InFlight{
 		reqType:    reqType,
 		startIndex: startIndex,
 		reqCnt:     cnt,
 		size:       size,
 		seq:        seq,
-		future:     rpcInfly,
+		future:     rpcInFly,
 	}
 	r.inFlights.PushBack(r.rpcInFly)
 	// TODO metrics
@@ -163,15 +189,32 @@ func (r *Replicator) pollInFlight() *InFlight {
 	return v.Value.(*InFlight)
 }
 
-//pollInFlight
+//startHeartbeat 当
 func (r *Replicator) startHeartbeat(startMs int64) {
 	dueTime := startMs + int64(r.options.dynamicHeartBeatTimeoutMs)
-	time.AfterFunc(time.Duration(dueTime)*time.Millisecond, func() {
-
+	future := polerpc.DoTimerSchedule(func() {
+		// 实际这里会触发的是 sendHeartbeat 的操作
+		r.setError(entity.ETIMEDOUT)
+	}, time.Duration(dueTime)*time.Millisecond, func() time.Duration {
+		return time.Duration(dueTime) * time.Millisecond
 	})
+	r.futures.Add(future)
 }
 
-//installSnapshot 告诉Follower，需要从自己这里拉取snapshot然后在Follower上进行snapshot的load
+func (r *Replicator) setError(errCode entity.RaftErrorCode) {
+	if r.destroy {
+		return
+	}
+	r.lock.Lock()
+	if r.destroy {
+		r.lock.Unlock()
+		return
+	}
+	onError(r, errCode)
+}
+
+//installSnapshot 告诉Follower，需要从自己这里拉取snapshot然后在Follower上进行snapshot的load, 因为从 Replicator 内部记录的日志索引
+//信息得出，当前的 Replicator 复制 Leader 的日志已经过慢了，
 func (r *Replicator) installSnapshot() {
 
 }
@@ -188,14 +231,16 @@ func (r *Replicator) sendEmptyEntries(isHeartbeat bool, heartbeatClosure *Append
 		r.lock.Unlock()
 	}()
 
+	var heartbeatDone *AppendEntriesResponseClosure
 	sendTime := time.Now()
 	if isHeartbeat {
 		r.heartbeatCounter++
-		if heartbeatClosure == nil {
-			heartbeatClosure = &AppendEntriesResponseClosure{RpcResponseClosure{F: func(resp proto.Message, status entity.Status) {
-				r.onHeartbeatReqReturn(status, heartbeatClosure.Resp.(*raft.AppendEntriesResponse), sendTime)
-			}}}
-		}
+		heartbeatDone = utils.IF(heartbeatClosure == nil, &AppendEntriesResponseClosure{RpcResponseClosure{F: func(resp proto.Message, status entity.Status) {
+			r.onHeartbeatReqReturn(status, heartbeatClosure.Resp.(*raft.AppendEntriesResponse), sendTime)
+		}}}, heartbeatClosure).(*AppendEntriesResponseClosure)
+
+		r.heartbeatInFly = polerpc.NewMonoFuture(r.raftOperator.AppendEntries(r.options.peerId.GetEndpoint(), req,
+			heartbeatDone))
 	} else {
 		req.Data = utils.EmptyBytes
 		r.statInfo.runningState = AppendingEntries
@@ -206,12 +251,18 @@ func (r *Replicator) sendEmptyEntries(isHeartbeat bool, heartbeatClosure *Append
 		stateVersion := r.version
 		reqSeq := r.getAndIncrementReqSeq()
 
-		r.raftOperator.AppendEntries(r.options.peerId.GetEndpoint(), req, &AppendEntriesResponseClosure{RpcResponseClosure{
-			F: func(resp proto.Message, status entity.Status) {
-				r.onRpcReturn(RequestTypeForAppendEntries, status, req, resp, reqSeq, stateVersion, sendTime)
-			},
-		}}).Subscribe(context.Background())
+		m := r.raftOperator.AppendEntries(r.options.peerId.GetEndpoint(), req,
+			&AppendEntriesResponseClosure{RpcResponseClosure{
+				F: func(resp proto.Message, status entity.Status) {
+					r.onRpcReturn(RequestTypeForAppendEntries, status, req, resp, reqSeq, stateVersion, sendTime)
+				},
+			}})
+		// 创建一个MonoFuture时，内部会自动做一个Subscribe(context.Context)的操作
+		future := polerpc.NewMonoFuture(m)
+		r.AddInFlights(RequestTypeForAppendEntries, r.nextIndex, 0, 0, reqSeq, future)
 	}
+	utils.RaftLog.Debug("node %s send HeartbeatRequest to %s term %s lastCommittedIndex %d",
+		r.options.node.nodeID.GetDesc(), r.options.peerId.GetDesc(), r.options.term, req.CommittedIndex)
 }
 
 func (r *Replicator) onRpcReturn(reqType RequestType, status entity.Status, req, resp proto.Message,
@@ -219,9 +270,17 @@ func (r *Replicator) onRpcReturn(reqType RequestType, status entity.Status, req,
 
 }
 
-//SendHeartbeat
-func (r *Replicator) SendHeartbeat(closure *AppendEntriesResponseClosure) {
+func (r *Replicator) sendNextEntries(nextSendingIndex int64) {
+	req := new(raft.AppendEntriesRequest)
+	if !r.fillCommonFields(req, nextSendingIndex-1, false) {
+
+	}
+}
+
+//sendHeartbeat
+func (r *Replicator) sendHeartbeat(closure *AppendEntriesResponseClosure) {
 	r.lock.Lock()
+	r.sendEmptyEntries(true, nil)
 }
 
 //onVoteReqReturn
@@ -273,4 +332,68 @@ func (r *Replicator) fillCommonFields(req *raft.AppendEntriesRequest, prevLogInd
 	req.CommittedIndex = opt.ballotBox.lastCommittedIndex
 
 	return true
+}
+
+func (r *Replicator) shutdown() {
+	r.destroy = true
+	r.futures.ForEach(func(index int, v interface{}) {
+		v.(polerpc.Future).Cancel()
+	})
+}
+
+func notifyOnCaughtUp(r *Replicator, errCode entity.RaftErrorCode) {
+
+}
+
+func notifyReplicatorStatusListener(r *Replicator, event ReplicatorEvent, st entity.Status) {
+
+}
+
+//onError 根据异常码 errCode 处理不同的逻辑
+func onError(r *Replicator, errCode entity.RaftErrorCode) {
+	switch errCode {
+	case entity.ETIMEDOUT:
+		// 触发心跳发送的逻辑
+		r.lock.Unlock()
+		utils.DefaultScheduler.Submit(func() {
+			r.sendHeartbeat(nil)
+		})
+	case entity.EStop:
+		// 停止某一个 Replicator
+		defer r.shutdown()
+		ele := r.inFlights.Front()
+		for {
+			val := ele.Next()
+			if val == nil {
+				break
+			}
+			inflight := val.Value.(*InFlight)
+			if inflight != r.rpcInFly {
+				inflight.future.Cancel()
+			}
+			if r.rpcInFly != nil {
+				r.rpcInFly.future.Cancel()
+				r.rpcInFly = nil
+			}
+			if r.heartbeatInFly != nil {
+				r.heartbeatInFly.Cancel()
+				r.heartbeatInFly = nil
+			}
+			if r.timeoutNowInFly != nil {
+				r.timeoutNowInFly.Cancel()
+				r.timeoutNowInFly = nil
+			}
+			r.futures.ForEach(func(index int, v interface{}) {
+				v.(polerpc.Future).Cancel()
+			})
+			if r.waitId >= 0 {
+				r.options.logMgn.RemoveWaiter(r.waitId)
+			}
+			notifyOnCaughtUp(r, errCode)
+			ele = val.Next()
+		}
+	default:
+		r.lock.Unlock()
+		panic(fmt.Errorf("unknown error code for replicator: %d", errCode))
+	}
 }

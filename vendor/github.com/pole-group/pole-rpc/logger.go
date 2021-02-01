@@ -195,7 +195,7 @@ func (l *AbstractLogger) Error(format string, args ...interface{}) {
 }
 
 func (l *AbstractLogger) canLog(level LogLevel, print func()) {
-	if atomic.LoadInt32((*int32)(&l.level)) >= int32(level) {
+	if atomic.LoadInt32((*int32)(&l.level)) <= int32(level) {
 		print()
 	}
 }

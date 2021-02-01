@@ -126,10 +126,10 @@ func returnResp(resp *ServerResponse, conn *websocket.Conn) {
 	}
 }
 
-func (wss *WebSocketServer) RegisterRequestHandler(path string, handler RequestResponseHandler) {
-	wss.dispatcher.registerRequestResponseHandler(path, handler)
+func (wss *WebSocketServer) RegisterRequestHandler(funName string, handler RequestResponseHandler) {
+	wss.dispatcher.registerRequestResponseHandler(funName, handler)
 }
 
-func (wss *WebSocketServer) RegisterChannelRequestHandler(path string, handler RequestChannelHandler) {
-	wss.dispatcher.registerRequestChannelHandler(path, handler)
+func (wss *WebSocketServer) RegisterChannelRequestHandler(funName string, handler RequestChannelHandler) {
+	wss.dispatcher.registerRequestChannelHandler(funName, handler)
 }

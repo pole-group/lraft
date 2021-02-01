@@ -163,12 +163,12 @@ func (rop *ReadOnlyOperator) handleReadIndexRequest(req *raft.ReadIndexRequest, 
 			utils.RaftLog.Error("handle read-index occur error : %s", err)
 		}
 
-		rop.node.rwMutex.RUnlock()
+		rop.node.lock.RUnlock()
 		utils.RaftLog.Debug("handle-read-index %s", time.Now().Sub(startTime))
 		// TODO metrics 信息记录
 	}()
 
-	rop.node.rwMutex.RLock()
+	rop.node.lock.RLock()
 
 	switch rop.node.state {
 	case StateLeader:
@@ -222,7 +222,7 @@ func (rop *ReadOnlyOperator) readLeader(req *raft.ReadIndexRequest, done *ReadIn
 	}
 
 	readOnlyOpt := n.raftOptions.ReadOnlyOpt
-	if readOnlyOpt == ReadOnlyLeaseBased && !n.IsisLeaderLeaseValid() {
+	if readOnlyOpt == ReadOnlyLeaseBased && !n.leaderLeaseIsValid() {
 		readOnlyOpt = ReadOnlySafe
 	}
 
@@ -244,7 +244,7 @@ func (rop *ReadOnlyOperator) readLeader(req *raft.ReadIndexRequest, done *ReadIn
 			if peer.Equal(n.serverID) {
 				continue
 			}
-			n.replicatorGroup.SendHeartbeat(peer, &heartbeatDone.AppendEntriesResponseClosure)
+			n.replicatorGroup.sendHeartbeat(peer, &heartbeatDone.AppendEntriesResponseClosure)
 		}
 	}
 }

@@ -12,7 +12,9 @@ import (
 
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/ptypes"
-	pole_rpc "github.com/pole-group/pole-rpc"
+	"github.com/jjeffcaii/reactor-go"
+	"github.com/jjeffcaii/reactor-go/mono"
+	polerpc "github.com/pole-group/pole-rpc"
 
 	"github.com/pole-group/lraft/entity"
 
@@ -63,12 +65,12 @@ type ConfigurationCtx struct {
 	stage       Stage
 	nChanges    int32
 	version     int64
-	newPeers    []*entity.PeerId
-	oldPeers    []*entity.PeerId
-	addingPeers []*entity.PeerId
+	newPeers    []entity.PeerId
+	oldPeers    []entity.PeerId
+	addingPeers []entity.PeerId
 
-	learners    []*entity.PeerId
-	oldLearners []*entity.PeerId
+	learners    []entity.PeerId
+	oldLearners []entity.PeerId
 	done        Closure
 }
 
@@ -86,6 +88,10 @@ func (cc *ConfigurationCtx) Start(conf, oldConf *entity.Configuration, done Clos
 
 func (cc *ConfigurationCtx) IsBusy() bool {
 	return cc.stage != StageNone
+}
+
+func (cc *ConfigurationCtx) Reset() {
+
 }
 
 type Node interface {
@@ -109,35 +115,33 @@ type Node interface {
 
 	ReadIndex(reqCtx []byte, done *ReadIndexClosure) error
 
-	ListPeers() []*entity.PeerId
+	ListPeers() ([]entity.PeerId, error)
 
-	ListAlivePeers() []*entity.PeerId
+	ListAlivePeers() ([]entity.PeerId, error)
 
-	ListLearners() []*entity.PeerId
+	ListLearners() ([]entity.PeerId, error)
 
-	ListAliceLearners() []*entity.PeerId
+	ListAliveLearners() ([]entity.PeerId, error)
 
-	AddPeer(peer *entity.PeerId, done Closure)
+	AddPeer(peer entity.PeerId, done Closure)
 
-	RemovePeer(peer *entity.PeerId, done Closure)
+	RemovePeer(peer entity.PeerId, done Closure)
 
 	ChangePeers(newConf *entity.Configuration, done Closure)
 
 	ResetPeers(newConf *entity.Configuration) entity.Status
 
-	AddLearners(learners []*entity.PeerId, done Closure)
+	AddLearners(learners []entity.PeerId, done Closure)
 
-	RemoveLearners(learners []*entity.PeerId, done Closure)
+	RemoveLearners(learners []entity.PeerId, done Closure)
 
-	ResetLearners(learners []*entity.PeerId, done Closure)
+	ResetLearners(learners []entity.PeerId, done Closure)
 
 	Snapshot(done Closure)
 
 	ResetElectionTimeoutMs(electionTimeoutMs int32)
 
-	TransferLeadershipTo(peer *entity.PeerId) entity.Status
-
-	ReadCommittedUserLog(index int64) *entity.UserLog
+	TransferLeadershipTo(peer entity.PeerId) entity.Status
 
 	AddReplicatorStateListener(replicatorStateListener ReplicatorStateListener)
 
@@ -195,46 +199,63 @@ func IsNodeActive(state NodeState) bool {
 }
 
 type nodeImpl struct {
-	rwMutex             *sync.RWMutex
-	state               NodeState
-	groupID             string
-	currTerm            int64
-	firstLogIndex       int64
-	nEntries            int32
-	lastLeaderTimestamp int64
-	raftNodeJobMgn      *RaftNodeJobManager
-	fsmCaller           FSMCaller
-	targetPriority      int32
-	nodeID              *entity.NodeId
-	serverID            entity.PeerId
-	leaderID            entity.PeerId
-	options             *NodeOptions
-	raftOptions         RaftOptions
-	readOnlyOperator    *ReadOnlyOperator
-	conf                entity.ConfigurationEntry
-	voteCtx             *entity.Ballot
-	preVoteCtx          *entity.Ballot
-	ballotBox           *BallotBox
-	handler             *raftRpcHandler
-	replicatorGroup     *ReplicatorGroup
-	logManager          LogManager
-	snapshotExecutor    SnapshotExecutor
-	rpcServer           *rpc.RaftRPCServer
-	shutdownWait        *sync.WaitGroup
+	lock                     *sync.RWMutex
+	state                    NodeState
+	groupID                  string
+	currTerm                 int64
+	firstLogIndex            int64
+	nEntries                 int32
+	lastLeaderTimestamp      int64
+	raftNodeJobMgn           *RaftNodeJobManager
+	fsmCaller                FSMCaller
+	targetPriority           int32
+	nodeID                   entity.NodeId
+	serverID                 entity.PeerId
+	leaderID                 entity.PeerId
+	votedId                  entity.PeerId
+	options                  NodeOptions
+	raftOptions              RaftOptions
+	readOnlyOperator         *ReadOnlyOperator
+	confCtx                  *ConfigurationCtx
+	conf                     *entity.ConfigurationEntry
+	voteCtx                  *entity.Ballot
+	preVoteCtx               *entity.Ballot
+	ballotBox                *BallotBox
+	handler                  *raftRpcHandler
+	replicatorGroup          *ReplicatorGroup
+	logManager               LogManager
+	metaStorage              *RaftMetaStorage
+	snapshotExecutor         *SnapshotExecutor
+	rpcServer                *rpc.RaftRPCServer
+	shutdownWait             *sync.WaitGroup
+	raftOperator             *RaftClientOperator
+	replicatorStateListeners []ReplicatorStateListener
+	transferFuture           polerpc.Future
+	wakingCandidate          *Replicator
+	stopTransferArg          *StopTransferArg
+}
+
+func (node *nodeImpl) init() {
+	node.lock.Lock()
+	if node.conf.IsStable() && node.conf.GetConf().Size() == 1 && node.conf.ContainPeer(node.serverID) {
+		electSelf(node)
+	} else {
+		node.lock.Unlock()
+	}
 }
 
 func (node *nodeImpl) GetLeaderID() entity.PeerId {
-	defer node.rwMutex.RUnlock()
-	node.rwMutex.RLock()
+	defer node.lock.RUnlock()
+	node.lock.RLock()
 	if node.leaderID.IsEmpty() {
 		return entity.EmptyPeer
 	}
 	return node.leaderID
 }
 
-func (node *nodeImpl) GetNodeID() *entity.NodeId {
-	if node.nodeID == nil {
-		node.nodeID = &entity.NodeId{
+func (node *nodeImpl) GetNodeID() entity.NodeId {
+	if entity.IsEmptyNodeID(node.nodeID) {
+		node.nodeID = entity.NodeId{
 			GroupID: node.GetGroupID(),
 			Peer:    node.serverID,
 		}
@@ -247,7 +268,7 @@ func (node *nodeImpl) GetGroupID() string {
 }
 
 func (node *nodeImpl) GetOptions() NodeOptions {
-	return *node.options
+	return node.options
 }
 
 func (node *nodeImpl) GetRaftOptions() RaftOptions {
@@ -258,12 +279,16 @@ func (node *nodeImpl) IsLeader() bool {
 	return node.IsLeaderWithBLock(true)
 }
 
+func (node *nodeImpl) IsLearner() bool {
+	return false
+}
+
 func (node *nodeImpl) IsLeaderWithBLock(blocking bool) bool {
 	if !blocking {
 		return node.state == StateLeader
 	}
-	defer node.rwMutex.RUnlock()
-	node.rwMutex.RLock()
+	defer node.lock.RUnlock()
+	node.lock.RLock()
 	return node.state == StateLeader
 }
 
@@ -319,27 +344,47 @@ func (node *nodeImpl) ReadIndex(reqCtx []byte, done *ReadIndexClosure) error {
 	return nil
 }
 
-func (node *nodeImpl) ListPeers() []*entity.PeerId {
+func (node *nodeImpl) ListPeers() ([]entity.PeerId, error) {
+	defer node.lock.RUnlock()
+	node.lock.Lock()
+	if node.state != StateLeader {
+		return nil, fmt.Errorf("not leader")
+	}
+	return node.conf.GetConf().ListPeers(), nil
+}
+
+func (node *nodeImpl) ListAlivePeers() ([]entity.PeerId, error) {
+	defer node.lock.RUnlock()
+	node.lock.Lock()
+	if node.state != StateLeader {
+		return nil, fmt.Errorf("not leader")
+	}
+	return node.getAlivePeers(node.conf.GetConf().ListPeers(), utils.GetCurrentTimeMs()), nil
+}
+
+func (node *nodeImpl) ListLearners() ([]entity.PeerId, error) {
+	defer node.lock.RUnlock()
+	node.lock.Lock()
+	if node.state != StateLeader {
+		return nil, fmt.Errorf("not leader")
+	}
+	return node.conf.GetConf().ListLearners(), nil
+}
+
+func (node *nodeImpl) ListAliveLearners() ([]entity.PeerId, error) {
+	defer node.lock.RUnlock()
+	node.lock.Lock()
+	if node.state != StateLeader {
+		return nil, fmt.Errorf("not leader")
+	}
+	return node.getAlivePeers(node.conf.GetConf().ListLearners(), utils.GetCurrentTimeMs()), nil
+}
+
+func (node *nodeImpl) AddPeer(peer entity.PeerId, done Closure) {
 
 }
 
-func (node *nodeImpl) ListAlivePeers() []*entity.PeerId {
-
-}
-
-func (node *nodeImpl) ListLearners() []*entity.PeerId {
-
-}
-
-func (node *nodeImpl) ListAliceLearners() []*entity.PeerId {
-
-}
-
-func (node *nodeImpl) AddPeer(peer *entity.PeerId, done Closure) {
-
-}
-
-func (node *nodeImpl) RemovePeer(peer *entity.PeerId, done Closure) {
+func (node *nodeImpl) RemovePeer(peer entity.PeerId, done Closure) {
 
 }
 
@@ -348,18 +393,18 @@ func (node *nodeImpl) ChangePeers(newConf *entity.Configuration, done Closure) {
 }
 
 func (node *nodeImpl) ResetPeers(newConf *entity.Configuration) entity.Status {
+	return entity.Status{}
+}
+
+func (node *nodeImpl) AddLearners(learners []entity.PeerId, done Closure) {
 
 }
 
-func (node *nodeImpl) AddLearners(learners []*entity.PeerId, done Closure) {
+func (node *nodeImpl) RemoveLearners(learners []entity.PeerId, done Closure) {
 
 }
 
-func (node *nodeImpl) RemoveLearners(learners []*entity.PeerId, done Closure) {
-
-}
-
-func (node *nodeImpl) ResetLearners(learners []*entity.PeerId, done Closure) {
+func (node *nodeImpl) ResetLearners(learners []entity.PeerId, done Closure) {
 
 }
 
@@ -371,12 +416,57 @@ func (node *nodeImpl) ResetElectionTimeoutMs(electionTimeoutMs int32) {
 
 }
 
-func (node *nodeImpl) TransferLeadershipTo(peer *entity.PeerId) entity.Status {
+func (node *nodeImpl) TransferLeadershipTo(peer entity.PeerId) entity.Status {
+	if peer.IsEmpty() {
+		return entity.NewStatus(entity.ERequest, "peer is empty")
+	}
 
-}
+	if peer.GetIP() == utils.IPAny {
+		return entity.NewStatus(entity.ERequest, "illegal peer")
+	}
 
-func (node *nodeImpl) ReadCommittedUserLog(index int64) *entity.UserLog {
+	if peer.Equal(node.serverID) {
+		return entity.StatusOK()
+	}
 
+	if !node.conf.ContainPeer(peer) {
+		return entity.NewStatus(entity.EINVAL, fmt.Sprintf("peer %s not in current configuration", peer.GetDesc()))
+	}
+
+	defer node.lock.Unlock()
+	node.lock.Lock()
+
+	if node.state != StateLeader {
+		utils.RaftLog.Warn("node %s can't transfer leadership to peer %s as it is in state %s.",
+			node.nodeID.GetDesc(), peer.GetDesc(), node.state.GetName())
+		return entity.NewStatus(utils.IF(node.state == StateTransferring, entity.EBUSY,
+			entity.EPERM).(entity.RaftErrorCode), "not a leader")
+	}
+	if node.confCtx.IsBusy() {
+		utils.RaftLog.Warn("Node %s refused to transfer leadership to peer %s when the leader is changing the"+
+			" configuration.", node.nodeID.GetDesc(), peer.GetDesc())
+		return entity.NewStatus(entity.EBUSY, "changing the configuration")
+	}
+
+	lastLogIndex := node.logManager.GetLastLogIndex()
+	if ok, err := node.replicatorGroup.transferLeadershipTo(peer, lastLogIndex); !ok || err != nil {
+		utils.RaftLog.Warn("no such peer : %s", peer.GetDesc())
+		return entity.NewStatus(entity.EINVAL, "no such peer "+peer.GetDesc())
+	}
+
+	node.state = StateTransferring
+	st := entity.NewStatus(entity.ETransferLeaderShip, fmt.Sprintf("raft leader is transferring leadership to %s",
+		peer.GetDesc()))
+	node.onLeaderStop(st)
+	arg := StopTransferArg{}
+	node.transferFuture = polerpc.NewMonoFuture(mono.
+		Delay(time.Duration(node.options.ElectionTimeoutMs) * time.Millisecond).
+		DoOnNext(
+			func(v reactor.Any) error {
+				node.onTransferTimeout(arg)
+				return nil
+			}))
+	return entity.StatusOK()
 }
 
 func (node *nodeImpl) AddReplicatorStateListener(replicatorStateListener ReplicatorStateListener) {
@@ -392,22 +482,37 @@ func (node *nodeImpl) ClearReplicatorStateListeners() {
 }
 
 func (node *nodeImpl) GetReplicatorStatueListeners() []ReplicatorStateListener {
-
+	return node.replicatorStateListeners
 }
 
 func (node *nodeImpl) GetNodeTargetPriority() int32 {
+	return node.targetPriority
+}
+
+func (node *nodeImpl) onError(err entity.RaftError) {
 
 }
 
-func (node *nodeImpl) OnError(err entity.RaftError) {
-
+func (node *nodeImpl) getAlivePeers(peers []entity.PeerId, monotonicNowMs int64) []entity.PeerId {
+	leaderLeaseTimeoutMs := node.options.getLeaderLeaseTimeoutMs()
+	newPeers := make([]entity.PeerId, 0, 0)
+	for _, peer := range peers {
+		if peer.Equal(node.serverID) || monotonicNowMs-node.replicatorGroup.GetReplicator(peer).lastRpcSendTimestamp <= leaderLeaseTimeoutMs {
+			newPeers = append(newPeers, peer.Copy())
+		}
+	}
+	return newPeers
 }
 
-func (node *nodeImpl) IsCurrentLeaderValid() bool {
+func (node *nodeImpl) getLeaderLeaseTimeoutMs() int64 {
+	return node.options.ElectionTimeoutMs * int64(node.options.LeaderLeaseTimeRatio) / 100
+}
+
+func (node *nodeImpl) currentLeaderIsValid() bool {
 	return utils.GetCurrentTimeMs()-node.lastLeaderTimestamp < node.options.ElectionTimeoutMs
 }
 
-func (node *nodeImpl) IsisLeaderLeaseValid() bool {
+func (node *nodeImpl) leaderLeaseIsValid() bool {
 	nowTime := time.Now()
 	if node.checkLeaderLease(nowTime) {
 		return true
@@ -420,8 +525,33 @@ func (node *nodeImpl) checkLeaderLease(t time.Time) bool {
 	return t.Unix()-node.lastLeaderTimestamp < int64(node.options.LeaderLeaseTimeRatio)
 }
 
+func (node *nodeImpl) checkReplicator(peer entity.PeerId) {
+	if node.state == StateLeader {
+		node.replicatorGroup.checkReplicator(peer, false)
+	}
+}
+
 func (node *nodeImpl) checkDeadNodes0(peers *utils.Set, monotonicNowMs time.Time, checkReplicator bool, deadNodes *entity.Configuration) {
 
+}
+
+func (node *nodeImpl) onTransferTimeout(arg StopTransferArg) {
+
+}
+
+func (node *nodeImpl) stepDown(term int64, wakeupCandidate bool, ) {
+	utils.RaftLog.Warn("node %s stepDown, term=%s, newTerm=%s, wakeupCandidate=%s.", node.nodeID.GetDesc(),
+		node.currTerm, term, wakeupCandidate)
+	if !IsNodeActive(node.state) {
+		return
+	}
+	if node.state == StateCandidate {
+	}
+}
+
+func (node *nodeImpl) onLeaderStop(st entity.Status) {
+	node.replicatorGroup.clearFailureReplicators()
+	node.fsmCaller.OnLeaderStop(st)
 }
 
 //resetLeaderId
@@ -457,6 +587,9 @@ func (node *nodeImpl) GetQuorum() int {
 	return c.GetPeers().Size()/2 + 1
 }
 
+type StopTransferArg struct {
+}
+
 type LeaderStableClosure struct {
 	StableClosure
 	node *nodeImpl
@@ -481,16 +614,16 @@ func (rrh *raftRpcHandler) init() {
 }
 
 func (rrh *raftRpcHandler) handlePreVoteRequest() func(cxt context.Context,
-	rpcCtx pole_rpc.RpcServerContext) {
-	return func(cxt context.Context, rpcCtx pole_rpc.RpcServerContext) {
+	rpcCtx polerpc.RpcServerContext) {
+	return func(cxt context.Context, rpcCtx polerpc.RpcServerContext) {
 		node := rrh.node
 		doUnLock := true
 		defer func() {
 			if doUnLock {
-				node.rwMutex.Unlock()
+				node.lock.Unlock()
 			}
 		}()
-		node.rwMutex.Lock()
+		node.lock.Lock()
 
 		preVoteReq := &proto2.RequestVoteRequest{}
 		if err := ptypes.UnmarshalAny(rpcCtx.GetReq().Body, preVoteReq); err != nil {
@@ -513,7 +646,7 @@ func (rrh *raftRpcHandler) handlePreVoteRequest() func(cxt context.Context,
 			return
 		}
 
-		candidateId := &entity.PeerId{}
+		candidateId := entity.PeerId{}
 		if !candidateId.Parse(preVoteReq.ServerID) {
 			utils.RaftLog.Warn("Node %s received PreVoteRequest from %s serverId bad format.",
 				node.nodeID.GetDesc(), preVoteReq.ServerID)
@@ -531,7 +664,7 @@ func (rrh *raftRpcHandler) handlePreVoteRequest() func(cxt context.Context,
 		}
 		granted := false
 		for {
-			if !node.leaderID.IsEmpty() && node.IsCurrentLeaderValid() {
+			if !node.leaderID.IsEmpty() && node.currentLeaderIsValid() {
 				utils.RaftLog.Info("Node %s ignore PreVoteRequest from %s, term=%d, currTerm=%d, "+
 					"because the leader %s's lease is still valid.",
 					node.nodeID.GetDesc(), preVoteReq.ServerID, preVoteReq.Term, node.currTerm, node.leaderID.GetDesc())
@@ -545,11 +678,11 @@ func (rrh *raftRpcHandler) handlePreVoteRequest() func(cxt context.Context,
 				rrh.checkReplicator(candidateId)
 			}
 			doUnLock = false
-			node.rwMutex.Unlock()
+			node.lock.Unlock()
 
 			lastLogID := node.logManager.GetLastLogID(true)
 			doUnLock = true
-			node.rwMutex.Lock()
+			node.lock.Lock()
 			requestLastLogId := entity.NewLogID(preVoteReq.LastLogIndex, preVoteReq.LastLogTerm)
 			granted = requestLastLogId.Compare(lastLogID) >= 0
 			if false {
@@ -569,16 +702,16 @@ func (rrh *raftRpcHandler) handlePreVoteRequest() func(cxt context.Context,
 	}
 }
 
-func (rrh *raftRpcHandler) checkReplicator(candidate *entity.PeerId) {
+func (rrh *raftRpcHandler) checkReplicator(candidate entity.PeerId) {
 
 }
 
-func (rrh *raftRpcHandler) convertToGrpcResp(resp proto.Message) (*pole_rpc.ServerResponse, error) {
+func (rrh *raftRpcHandler) convertToGrpcResp(resp proto.Message) (*polerpc.ServerResponse, error) {
 	body, err := ptypes.MarshalAny(resp)
 	if err != nil {
 		return nil, err
 	}
-	gRPCResp := &pole_rpc.ServerResponse{
+	gRPCResp := &polerpc.ServerResponse{
 		Body: body,
 	}
 	return gRPCResp, nil

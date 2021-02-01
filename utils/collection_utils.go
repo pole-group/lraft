@@ -6,6 +6,7 @@ package utils
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"sync"
 )
@@ -17,6 +18,74 @@ var (
 const (
 	IndexOutOfBoundErrMsg = "index out of bound, index=%d, offset=%d, pos=%s"
 )
+
+type ConcurrentSlice struct {
+	lock     sync.RWMutex
+	capacity int32
+	size     int32
+	cursor   int32
+	values []interface{}
+}
+
+func (cs *ConcurrentSlice) Remove(v interface{}) {
+	defer cs.lock.Unlock()
+	cs.lock.Lock()
+	target := cs.values[:0]
+	for _, item := range cs.values {
+		if item != v {
+			target = append(target, item)
+		}
+	}
+	cs.values = target
+	cs.cursor = int32(len(cs.values))
+}
+
+func (cs *ConcurrentSlice) Add(v interface{}) {
+	defer cs.lock.Unlock()
+	cs.lock.Lock()
+	if cs.cursor >= cs.capacity {
+		newValues := make([]interface{}, cs.capacity+cs.capacity/2, cs.capacity+cs.capacity/2)
+		copy(newValues, cs.values)
+		cs.values = newValues
+	}
+	cs.values[cs.cursor] = v
+	cs.cursor++
+}
+
+func (cs *ConcurrentSlice) GetFirst() interface{} {
+	defer cs.lock.RUnlock()
+	cs.lock.RUnlock()
+	return cs.values[0]
+}
+
+func (cs *ConcurrentSlice) GetLast() interface{} {
+	defer cs.lock.RUnlock()
+	cs.lock.RUnlock()
+	return cs.values[cs.size-1]
+}
+
+func (cs *ConcurrentSlice) ForEach(consumer func(index int, v interface{})) {
+	defer cs.lock.RUnlock()
+	cs.lock.RUnlock()
+	for i, v := range cs.values {
+		consumer(i, v)
+	}
+}
+
+func (cs *ConcurrentSlice) Get(index int32) (interface{}, error) {
+	defer cs.lock.RUnlock()
+	cs.lock.RUnlock()
+	if index >= cs.capacity {
+		return nil, fmt.Errorf("index : %d is >= capacity : %d", index, cs.capacity)
+	}
+	return cs.values[index], nil
+}
+
+func (cs *ConcurrentSlice) Size() int32 {
+	defer cs.lock.RUnlock()
+	cs.lock.RUnlock()
+	return cs.size
+}
 
 type ConcurrentMap struct {
 	actualMap map[interface{}]interface{}
@@ -48,6 +117,23 @@ func (cm *ConcurrentMap) Contains(k interface{}) bool {
 	return exist
 }
 
+func (cm *ConcurrentMap) ForEach(consumer func(k, v interface{})) {
+	defer cm.rwLock.RUnlock()
+	cm.rwLock.RLock()
+	for k, v := range cm.actualMap {
+		consumer(k, v)
+	}
+}
+
+func (cm *ConcurrentMap) Clear() {
+	defer cm.rwLock.Unlock()
+	cm.rwLock.Lock()
+	cm.actualMap = make(map[interface{}]interface{})
+}
+
+func (cm *ConcurrentMap) Size() int {
+	return len(cm.actualMap)
+}
 
 type void struct{}
 
@@ -381,7 +467,10 @@ func (s *Segment) Add(e interface{}) {
 }
 
 func (s *Segment) Get(index int32) interface{} {
-	RequireTrue(index < s.pos && index >= s.offset, IndexOutOfBoundErrMsg, index, s.offset, s.pos)
+	if err := RequireTrue(index < s.pos && index >= s.offset, IndexOutOfBoundErrMsg, index, s.offset,
+		s.pos); err != nil {
+		return nil
+	}
 	return s.elements[index]
 }
 

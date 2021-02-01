@@ -40,12 +40,12 @@ func (rcop *RaftClientOperator) AppendEntries(endpoint entity.Endpoint,
 }
 
 func (rcop *RaftClientOperator) RequestVote(endpoint entity.Endpoint, req *proto.RequestVoteRequest,
-	done *RequestVoteResponseClosure) mono.Mono {
+	done *OnRequestVoteRpcDone) mono.Mono {
 	return invokeWithClosure(endpoint, rcop.raftClient, rpc.CoreRequestVoteRequest, req, &done.RpcResponseClosure)
 }
 
 func (rcop *RaftClientOperator) PreVote(endpoint entity.Endpoint, req *proto.RequestVoteRequest,
-	done *RequestVoteResponseClosure) mono.Mono {
+	done *OnPreVoteRpcDone) mono.Mono {
 	return invokeWithClosure(endpoint, rcop.raftClient, rpc.CoreRequestPreVoteRequest, req, &done.RpcResponseClosure)
 }
 

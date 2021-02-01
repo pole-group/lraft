@@ -29,9 +29,10 @@ type rSocketServerRpcContext struct {
 	fSink chan *ServerResponse
 }
 
-func newOnceRsRpcContext() *rSocketServerRpcContext {
+func newOnceRsRpcContext(mSink reactorM.Sink) *rSocketServerRpcContext {
 	return &rSocketServerRpcContext{
-		req: atomic.Value{},
+		req:   atomic.Value{},
+		mSink: mSink,
 	}
 }
 
@@ -56,6 +57,7 @@ func (rpc *rSocketServerRpcContext) Send(resp *ServerResponse) {
 	}
 	if rpc.mSink != nil {
 		rpc.mSink.Success(resp)
+		rpc.Complete()
 		return
 	}
 	panic(ErrorCannotResponse)

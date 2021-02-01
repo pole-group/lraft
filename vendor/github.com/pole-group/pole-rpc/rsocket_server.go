@@ -52,8 +52,8 @@ func (r *RSocketDispatcher) createRequestResponseSocket() rsocket.OptAbstractSoc
 		}
 
 		if handler := r.FindReqRespHandler(req.GetFunName()); handler != nil {
-			rpcCtx := newOnceRsRpcContext()
 			return mono.Raw(reactorM.Create(func(ctx context.Context, sink reactorM.Sink) {
+				rpcCtx := newOnceRsRpcContext(sink)
 				rpcCtx.req.Store(req)
 				handler(context.Background(), rpcCtx)
 			}).Map(func(any reactor.Any) (reactor.Any, error) {
@@ -68,9 +68,6 @@ func (r *RSocketDispatcher) createRequestResponseSocket() rsocket.OptAbstractSoc
 				}
 			})).DoOnError(func(e error) {
 				fmt.Printf("an exception occurred while processing the request %s\n", err)
-			}).DoOnSuccess(func(input payload.Payload) error {
-				rpcCtx.Complete()
-				return nil
 			})
 		}
 		return mono.Error(ErrorNotImplement)
@@ -95,8 +92,6 @@ func (r *RSocketDispatcher) createRequestChannelSocket() rsocket.OptAbstractSock
 				}
 				if err != nil {
 					rpcCtx.Send(&ServerResponse{
-						RequestId: req.RequestId,
-						FunName:   req.FunName,
 						Code:      0,
 						Msg:       err.Error(),
 					})
@@ -133,12 +128,12 @@ type RSocketServer struct {
 	ErrChan    chan error
 }
 
-func (rs *RSocketServer) RegisterRequestHandler(path string, handler RequestResponseHandler) {
-	rs.dispatcher.registerRequestResponseHandler(path, handler)
+func (rs *RSocketServer) RegisterRequestHandler(funName string, handler RequestResponseHandler) {
+	rs.dispatcher.registerRequestResponseHandler(funName, handler)
 }
 
-func (rs *RSocketServer) RegisterChannelRequestHandler(path string, handler RequestChannelHandler) {
-	rs.dispatcher.registerRequestChannelHandler(path, handler)
+func (rs *RSocketServer) RegisterChannelRequestHandler(funName string, handler RequestChannelHandler) {
+	rs.dispatcher.registerRequestChannelHandler(funName, handler)
 }
 
 func NewRSocketServer(ctx context.Context, label string, port int32, openTSL bool) *RSocketServer {

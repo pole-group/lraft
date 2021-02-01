@@ -405,7 +405,7 @@ func (fci *FSMCallerImpl) setError(err entity.RaftError) {
 		fci.fsm.OnError(err)
 	}
 	if fci.node != nil {
-		fci.node.OnError(err)
+		fci.node.onError(err)
 	}
 }
 
