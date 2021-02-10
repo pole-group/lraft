@@ -313,7 +313,7 @@ func (tMap *TreeMap) ComputeIfAbsent(key interface{}, supplier func() interface{
 		val: nil,
 	}
 	targetEntry := tMap.insertIfValueNotExist(keyEntry, supplier, tMap.root, nil)
-	tMap.size ++
+	tMap.size++
 	return targetEntry.val
 }
 
@@ -343,7 +343,7 @@ func (tMap *TreeMap) IsEmpty() bool {
 	return tMap.size == 0
 }
 
-func (tMap *TreeMap) Clear()  {
+func (tMap *TreeMap) Clear() {
 	tMap.size = 0
 	tMap.root = nil
 }

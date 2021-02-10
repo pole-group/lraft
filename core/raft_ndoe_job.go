@@ -344,9 +344,11 @@ func (sj *SnapshotJob) handleSnapshotTimeout() {
 }
 
 type StepDownJob struct {
-	node   *nodeImpl
-	jogMgn *RaftNodeJobManager
-	lock   *sync.RWMutex
+	node     *nodeImpl
+	jogMgn   *RaftNodeJobManager
+	lock     *sync.RWMutex
+	future   polerpc.Future
+	stopSign JobSwitch
 }
 
 func newStepDownJob(node *nodeImpl, mgn *RaftNodeJobManager) *StepDownJob {
@@ -359,12 +361,50 @@ func newStepDownJob(node *nodeImpl, mgn *RaftNodeJobManager) *StepDownJob {
 
 //start 任务启动
 func (sj *StepDownJob) start() {
-
+	atomic.StoreInt32((*int32)(&sj.stopSign), int32(OpenJob))
+	sj.future = polerpc.DelaySchedule(func() {
+		if atomic.LoadInt32((*int32)(&sj.stopSign)) == int32(OpenJob) {
+			sj.handleStepDownTimeout()
+		}
+	}, time.Duration(sj.node.options.ElectionTimeoutMs>>1)*time.Millisecond)
 }
 
 //stop 任务不执行
 func (sj *StepDownJob) stop() {
+	atomic.StoreInt32((*int32)(&sj.stopSign), int32(Suspend))
+	sj.future.Cancel()
+}
 
+func (sj *StepDownJob) handleStepDownTimeout() {
+	node := sj.node
+	checkDeadNodes := func(lock sync.Locker) bool {
+		defer lock.Unlock()
+		lock.Lock()
+		if node.state > StateTransferring {
+			utils.RaftLog.Debug("node %s stop step-down timer, term=%d, state=%s.", node.nodeID.GetDesc(),
+				node.currTerm, node.state.GetName())
+			return false
+		}
+
+		nowMs := time.Now()
+		if !node.checkDeadNodes(node.conf.GetConf(), nowMs, false) {
+			return false
+		}
+
+		if !node.conf.GetOldConf().IsEmpty() {
+			if !node.checkDeadNodes(node.conf.GetOldConf(), nowMs, false) {
+				return false
+			}
+		}
+		return true
+	}
+
+	// 先是进行乐观的检查
+	if checkDeadNodes(sj.lock.RLocker()) {
+		return
+	}
+	// 进行悲观锁检查
+	checkDeadNodes(sj.lock)
 }
 
 //electSelf 通过 preVote 之后，就开始真正的将自己的term上调并进行Leader的竞选
@@ -446,7 +486,7 @@ func electSelf(node *nodeImpl) {
 
 		done.F = func(resp proto.Message, status entity.Status) {
 			if status.IsOK() {
-				handleRequestVoteResponse(done.PeerId, done.Term, done.Resp.(*raft.RequestVoteResponse))
+				handleRequestVoteResponse(node, done.PeerId, done.Term, done.Resp.(*raft.RequestVoteResponse))
 			} else {
 				utils.RaftLog.Warn("node : %s request vote to : %s error : %s", node.nodeID.GetDesc(),
 					done.PeerId.GetDesc(), status.GetMsg())
@@ -464,7 +504,7 @@ func electSelf(node *nodeImpl) {
 	}
 }
 
-//doPreVote 为了避免 Term 因为选举失败而导致不堵上涨的问题，这里做了优化，采用预投票的方式，先试探一下自己是否可以竞争为 Leader,
+//doPreVote 为了避免 Term 因为选举失败而导致 term 上涨的问题，这里做了优化，采用预投票的方式，先试探一下自己是否可以竞争为 Leader,
 //如果可以的话, 在执行真正的 Vote 机制
 func doPreVote(node *nodeImpl) {
 	utils.RaftLog.Info("node : %s term : %d startJob preVote", node.nodeID.GetDesc(), node.currTerm)
@@ -479,6 +519,7 @@ func doPreVote(node *nodeImpl) {
 	oldTerm := node.currTerm
 	node.lock.Unlock()
 
+	// 首先要保证自己当前所有已经接收到的 LogEntry 都已经 flush 到了持久化存储介质中
 	lastLogId := node.logManager.GetLastLogID(true)
 	doUnlock := true
 
@@ -541,8 +582,30 @@ func doPreVote(node *nodeImpl) {
 }
 
 // handleRequestVoteResponse
-func handleRequestVoteResponse(peer entity.PeerId, term int64, resp *raft.RequestVoteResponse) {
+func handleRequestVoteResponse(node *nodeImpl, peer entity.PeerId, term int64, resp *raft.RequestVoteResponse) {
+	defer node.lock.Unlock()
+	node.lock.Lock()
 
+	if node.state != StateCandidate {
+		utils.RaftLog.Warn("Node %s received invalid RequestVoteResponse from %s, state not in StateCandidate but %s.",
+			node.nodeID.GetDesc(), peer.GetDesc(), node.state.GetName())
+		return
+	}
+
+	if term != node.currTerm {
+		return
+	}
+	if resp.Term > term {
+		stepDown(node, resp.Term, false, entity.NewStatus(entity.EHigherTermResponse,
+			"Raft node receives higher term RequestVoteResponse."))
+		return
+	}
+	if resp.Granted {
+		node.voteCtx.Grant(peer)
+		if node.voteCtx.IsGrant() {
+			becomeLeader(node)
+		}
+	}
 }
 
 // handlePreVoteResponse
@@ -648,10 +711,28 @@ func becomeLeader(node *nodeImpl) {
 		if peer.Equal(node.serverID) {
 			return
 		}
-		if success, err := node.replicatorGroup.AddReplicator(peer, ReplicatorFollower, true); !success || err != nil {
-			utils.RaftLog.Error("fail to add a replicator, peer %s, err %s", peer.GetDesc(), err)
+		utils.RaftLog.Debug("node : %s add a follower replicator, term=%d, peer=%s", node.nodeID.GetDesc(),
+			node.currTerm, peer.GetDesc())
+		if success, err := node.replicatorGroup.addReplicator(peer, ReplicatorFollower, true); !success || err != nil {
+			utils.RaftLog.Error("fail to add a follower replicator, peer %s, err %s", peer.GetDesc(), err)
 		}
 	})
+
+	node.conf.ListLearners().Range(func(value interface{}) {
+		learner := value.(entity.PeerId)
+		utils.RaftLog.Debug("node : %s add a learner replicator, term=%d, peer=%s", node.nodeID.GetDesc(),
+			node.currTerm, learner.GetDesc())
+		if success, err := node.replicatorGroup.addReplicator(learner, ReplicatorLearner, true); !success || err != nil {
+			utils.RaftLog.Error("fail to add a learner replicator, peer %s, err %s", learner.GetDesc(), err)
+		}
+	})
+
+	node.ballotBox.RestPendingIndex(node.logManager.GetLastLogIndex() + 1)
+	if node.confCtx.IsBusy() {
+		panic(fmt.Errorf("node conf ctx is busy : %#v", node.confCtx.stage))
+	}
+	node.confCtx.flush(node.conf.GetConf(), node.conf.GetOldConf())
+	node.raftNodeJobMgn.startJob(JobForStepDown)
 }
 
 func doSnapshot(node *nodeImpl, done Closure) {

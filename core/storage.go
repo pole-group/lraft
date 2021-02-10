@@ -15,7 +15,10 @@ type RaftMetaStorage struct {
 	isInited bool
 }
 
-// setTermAndVotedFor 
+type RaftMetaInfo struct {
+}
+
+// setTermAndVotedFor
 func (rms *RaftMetaStorage) setTermAndVotedFor(term int64, peer entity.PeerId) {
 
 }

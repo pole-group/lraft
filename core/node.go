@@ -90,6 +90,10 @@ func (cc *ConfigurationCtx) IsBusy() bool {
 	return cc.stage != StageNone
 }
 
+func (cc *ConfigurationCtx) flush(newConf, oldConf *entity.Configuration) {
+
+}
+
 func (cc *ConfigurationCtx) Reset() {
 
 }
@@ -232,7 +236,7 @@ type nodeImpl struct {
 	replicatorStateListeners []ReplicatorStateListener
 	transferFuture           polerpc.Future
 	wakingCandidate          *Replicator
-	stopTransferArg          *StopTransferArg
+	stopTransferArg          *stopTransferArg
 }
 
 func (node *nodeImpl) init() {
@@ -458,7 +462,10 @@ func (node *nodeImpl) TransferLeadershipTo(peer entity.PeerId) entity.Status {
 	st := entity.NewStatus(entity.ETransferLeaderShip, fmt.Sprintf("raft leader is transferring leadership to %s",
 		peer.GetDesc()))
 	node.onLeaderStop(st)
-	arg := StopTransferArg{}
+	arg := stopTransferArg{
+		term: node.currTerm,
+		peer: peer,
+	}
 	node.transferFuture = polerpc.NewMonoFuture(mono.
 		Delay(time.Duration(node.options.ElectionTimeoutMs) * time.Millisecond).
 		DoOnNext(
@@ -489,15 +496,33 @@ func (node *nodeImpl) GetNodeTargetPriority() int32 {
 	return node.targetPriority
 }
 
+//onError 发生了不可挽回的异常信息，需要停止本节点的所有任务工作
 func (node *nodeImpl) onError(err entity.RaftError) {
-
+	utils.RaftLog.Error("node %s got error: %#v.", node.nodeID.GetDesc(), err)
+	if node.fsmCaller != nil {
+		// 通知用户状态机，当前RaftGroupNode出现了无法挽救的异常，需要及时处理
+		node.fsmCaller.OnError(err)
+	}
+	if node.readOnlyOperator != nil {
+		// 所有的 RaftReadIndex 都不能继续工作
+		node.readOnlyOperator.err = &err
+	}
+	defer node.lock.Unlock()
+	node.lock.Lock()
+	if node.state <= StateFollower {
+		stepDown(node, node.currTerm, node.state == StateLeader, entity.NewStatus(entity.EBadNode, "Raft node(leader or candidate) is in error."))
+	}
+	if node.state <= StateError {
+		node.state = StateError
+	}
 }
 
+//getAlivePeers 获取 Leader 认为存活的节点数据，此方法只能由 Leader 节点进行调用
 func (node *nodeImpl) getAlivePeers(peers []entity.PeerId, monotonicNowMs int64) []entity.PeerId {
 	leaderLeaseTimeoutMs := node.options.getLeaderLeaseTimeoutMs()
 	newPeers := make([]entity.PeerId, 0, 0)
 	for _, peer := range peers {
-		if peer.Equal(node.serverID) || monotonicNowMs-node.replicatorGroup.GetReplicator(peer).lastRpcSendTimestamp <= leaderLeaseTimeoutMs {
+		if peer.Equal(node.serverID) || monotonicNowMs-node.replicatorGroup.getReplicator(peer).lastRpcSendTimestamp <= leaderLeaseTimeoutMs {
 			newPeers = append(newPeers, peer.Copy())
 		}
 	}
@@ -517,38 +542,101 @@ func (node *nodeImpl) leaderLeaseIsValid() bool {
 	if node.checkLeaderLease(nowTime) {
 		return true
 	}
-	node.checkDeadNodes0(node.conf.GetConf().GetPeers(), nowTime, false, nil)
+	node.checkDeadNodes0(node.conf.GetConf().ListPeers(), nowTime, false, nil)
 	return node.checkLeaderLease(nowTime)
 }
 
 func (node *nodeImpl) checkLeaderLease(t time.Time) bool {
-	return t.Unix()-node.lastLeaderTimestamp < int64(node.options.LeaderLeaseTimeRatio)
+	return t.Unix()*1000-node.lastLeaderTimestamp < int64(node.options.LeaderLeaseTimeRatio)
 }
 
-func (node *nodeImpl) checkReplicator(peer entity.PeerId) {
-	if node.state == StateLeader {
+//checkDeadNodes 检查当前 RaftGroup 集群是否可以正常对外工作
+func (node *nodeImpl) checkDeadNodes(conf *entity.Configuration, monotonicNowMs time.Time, stepDownOnCheckFail bool) bool {
+	for _, peer := range conf.ListLearners() {
 		node.replicatorGroup.checkReplicator(peer, false)
+	}
+	peers := conf.ListPeers()
+	deadNodes := entity.NewEmptyConfiguration()
+	if node.checkDeadNodes0(peers, monotonicNowMs, true, deadNodes) {
+		return true
+	}
+	if stepDownOnCheckFail {
+		stepDown(node, node.currTerm, false, entity.NewStatus(entity.ERaftTimedOut,
+			fmt.Sprintf("majority of the group dies: %d/%d", deadNodes.Size(), len(peers))))
+	}
+	return false
+}
+
+//checkDeadNodes0 检查当前 Raft Node 是否可以用
+func (node *nodeImpl) checkDeadNodes0(peers []entity.PeerId, monotonicNowMs time.Time, checkReplicator bool,
+	deadNodes *entity.Configuration) bool {
+	leaderLeaseTimeoutMs := node.getLeaderLeaseTimeoutMs()
+	aliveCount := 0
+	startLease := utils.Int64MaxValue
+
+	ms := monotonicNowMs.Unix() * 1000
+
+	for _, peer := range peers {
+		if peer.Equal(node.serverID) {
+			continue
+		}
+		if checkReplicator {
+			node.replicatorGroup.checkReplicator(peer, false)
+		}
+		lastRpcSendTimestamp := node.replicatorGroup.getReplicator(peer).lastRpcSendTimestamp
+		if ms-lastRpcSendTimestamp <= leaderLeaseTimeoutMs {
+			aliveCount++
+			if startLease > lastRpcSendTimestamp {
+				startLease = lastRpcSendTimestamp
+			}
+			continue
+		}
+		if deadNodes != nil {
+			deadNodes.AddPeers(peers)
+		}
+	}
+	if aliveCount >= len(peers)/2+1 {
+		node.lastLeaderTimestamp = startLease
+		return true
+	}
+	return false
+}
+
+//onTransferTimeout 当移交 Leader 角色超时时的处理
+func (node *nodeImpl) onTransferTimeout(arg stopTransferArg) {
+	node.handleTransferTimeout(arg.term, arg.peer)
+}
+
+//handleTransferTimeout 处理转移 Leader 任务超时的逻辑处理
+func (node *nodeImpl) handleTransferTimeout(term int64, peer entity.PeerId) {
+	utils.RaftLog.Info("node %s failed to transfer leadership to peer %s, reached timeout.", node.nodeID.GetDesc(),
+		peer.GetDesc())
+	defer node.lock.Unlock()
+	node.lock.Lock()
+	if term == node.currTerm {
+		//TODO 为什么任务超时直接强制将 Leader 指定为自己
+		node.replicatorGroup.stopTransferLeadership(peer)
+		if node.state == StateTransferring {
+			node.fsmCaller.OnLeaderStart(term)
+			node.state = StateLeader
+			node.stopTransferArg = nil
+		}
 	}
 }
 
-func (node *nodeImpl) checkDeadNodes0(peers *utils.Set, monotonicNowMs time.Time, checkReplicator bool, deadNodes *entity.Configuration) {
-
-}
-
-func (node *nodeImpl) onTransferTimeout(arg StopTransferArg) {
-
-}
-
-func (node *nodeImpl) stepDown(term int64, wakeupCandidate bool, ) {
+//stepDown 节点降级
+func (node *nodeImpl) stepDown(term int64, wakeupCandidate bool) {
 	utils.RaftLog.Warn("node %s stepDown, term=%s, newTerm=%s, wakeupCandidate=%s.", node.nodeID.GetDesc(),
 		node.currTerm, term, wakeupCandidate)
 	if !IsNodeActive(node.state) {
 		return
 	}
 	if node.state == StateCandidate {
+		node.raftNodeJobMgn.stopJob(JobForVote)
 	}
 }
 
+//onLeaderStop
 func (node *nodeImpl) onLeaderStop(st entity.Status) {
 	node.replicatorGroup.clearFailureReplicators()
 	node.fsmCaller.OnLeaderStop(st)
@@ -587,7 +675,9 @@ func (node *nodeImpl) GetQuorum() int {
 	return c.GetPeers().Size()/2 + 1
 }
 
-type StopTransferArg struct {
+type stopTransferArg struct {
+	term int64
+	peer entity.PeerId
 }
 
 type LeaderStableClosure struct {

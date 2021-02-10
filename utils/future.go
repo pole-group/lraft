@@ -108,6 +108,6 @@ func (f *MonoFuture) run() {
 	f.future.Subscribe(f.ctx)
 }
 
-func (f *MonoFuture) Cancel() () {
+func (f *MonoFuture) Cancel() {
 	f.cancel()
 }

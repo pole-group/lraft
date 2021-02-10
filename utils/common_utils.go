@@ -14,6 +14,10 @@ import (
 	"github.com/pkg/errors"
 )
 
+const (
+	Int64MaxValue = int64(0x7fffffffffffffff)
+)
+
 func AnalyzeIPAndPort(address string) (ip string, port int) {
 	s := strings.Split(address, ":")
 	port, err := strconv.Atoi(s[1])

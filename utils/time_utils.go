@@ -5,7 +5,6 @@
 package utils
 
 import (
-	"context"
 	"sync/atomic"
 	"time"
 
@@ -16,8 +15,8 @@ var currentTimeMs int64
 var currentTimeNs int64
 
 func init() {
-	polerpc.DoTickerSchedule(context.Background(), func() {
-		atomic.StoreInt64(&currentTimeMs, time.Now().Unix() * 1000)
+	polerpc.DoTickerSchedule(func() {
+		atomic.StoreInt64(&currentTimeMs, time.Now().Unix()*1000)
 		atomic.StoreInt64(&currentTimeNs, time.Now().UnixNano())
 	}, time.Duration(100)*time.Millisecond)
 }

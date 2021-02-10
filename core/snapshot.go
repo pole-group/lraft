@@ -5,6 +5,8 @@
 package core
 
 import (
+	"io"
+
 	"github.com/golang/protobuf/proto"
 
 	"github.com/pole-group/lraft/entity"
@@ -12,8 +14,8 @@ import (
 )
 
 const (
-	raftSnapshotMetaFile   = "__raft_snapshot_meta"
-	raftSnapshotPrefix     = "snapshot_"
+	raftSnapshotMetaFile    = "__raft_snapshot_meta"
+	raftSnapshotPrefix      = "snapshot_"
 	RemoteSnapshotURISchema = "remote://"
 )
 
@@ -37,6 +39,8 @@ type SnapshotReader interface {
 	Load() *raft.SnapshotMeta
 
 	GenerateURIForCopy() string
+
+	io.Closer
 }
 
 type SnapshotWriter interface {
@@ -64,7 +68,7 @@ type LastLogIndexListener interface {
 }
 
 type NewLogCallback interface {
-	OnNewLog(arg interface{}, errCode int32)
+	OnNewLog(arg *Replicator, errCode entity.RaftErrorCode)
 }
 
 type LogStorage interface {
@@ -124,7 +128,7 @@ type LogManager interface {
 
 	CheckAndSetConfiguration(current *entity.ConfigurationEntry)
 
-	Wait(expectedLastLogIndex int64, cb NewLogCallback, arg interface{}) int64
+	Wait(expectedLastLogIndex int64, cb NewLogCallback, replicator *Replicator) int64
 
 	RemoveWaiter(id int64) bool
 

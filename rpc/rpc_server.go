@@ -10,6 +10,7 @@ import (
 	polerpc "github.com/pole-group/pole-rpc"
 )
 
+//RaftRPCServer raft 的 rpc-server，封装 pole-group/pole-rpc
 type RaftRPCServer struct {
 	IsReady chan struct{}
 	server  polerpc.TransportServer
@@ -17,6 +18,7 @@ type RaftRPCServer struct {
 	cancelF context.CancelFunc
 }
 
+//NewRaftRPCServer 创建 RpcServer
 func NewRaftRPCServer(label string, port int32, openTSL bool) (*RaftRPCServer, error) {
 	ctx, cancelF := context.WithCancel(context.Background())
 
@@ -35,6 +37,7 @@ func NewRaftRPCServer(label string, port int32, openTSL bool) (*RaftRPCServer, e
 	return r, err
 }
 
+//GetRealServer 获取真正的 RpcServer
 func (rpcServer *RaftRPCServer) GetRealServer() polerpc.TransportServer {
 	return rpcServer.server
 }

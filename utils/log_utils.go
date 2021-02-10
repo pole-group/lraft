@@ -4,8 +4,8 @@
 
 package utils
 
-import pole_rpc "github.com/pole-group/pole-rpc"
+import polerpc "github.com/pole-group/pole-rpc"
 
 var (
-	RaftLog = pole_rpc.NewTestLogger("LRaft")
+	RaftLog = polerpc.NewTestLogger("LRaft")
 )

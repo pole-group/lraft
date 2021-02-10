@@ -87,9 +87,11 @@ const (
 )
 
 type RaftOptions struct {
-	StepDownWhenVoteTimeout bool
-	ReadOnlyOpt             ReadOnlyOption
-	MaxReplicatorInflightMs int64
+	StepDownWhenVoteTimeout   bool
+	ReadOnlyOpt               ReadOnlyOption
+	MaxReplicatorInflightMsgs int64
+	MaxEntriesSize            int32
+	MaxBodySize               int32
 }
 
 type replicatorOptions struct {

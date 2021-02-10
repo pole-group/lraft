@@ -9,6 +9,7 @@ import (
 	"github.com/pole-group/lraft/entity"
 )
 
-func NewRaftNode(groupId string, serverId *entity.PeerId, opts *core.NodeOptions) core.Node {
+//NewRaftNode 创建一个 Raft 节点
+func NewRaftNode(groupID string, serverID *entity.PeerId, opts *core.NodeOptions) core.Node {
 	return nil
 }

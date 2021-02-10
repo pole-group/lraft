@@ -10,7 +10,7 @@ import (
 	"github.com/jjeffcaii/reactor-go"
 	"github.com/jjeffcaii/reactor-go/mono"
 	"github.com/panjf2000/ants/v2"
-	pole_rpc "github.com/pole-group/pole-rpc"
+	polerpc "github.com/pole-group/pole-rpc"
 
 	"github.com/pole-group/lraft/entity"
 	"github.com/pole-group/lraft/proto"
@@ -71,7 +71,7 @@ func invokeWithClosure(endpoint entity.Endpoint, rpcClient *rpc.RaftClient, path
 		return mono.Error(err)
 	}
 
-	gRep := &pole_rpc.ServerRequest{
+	gRep := &polerpc.ServerRequest{
 		Body:    body,
 		FunName: path,
 	}
@@ -82,7 +82,7 @@ func invokeWithClosure(endpoint entity.Endpoint, rpcClient *rpc.RaftClient, path
 	}
 
 	return mono.Just(resp).DoOnNext(func(v reactor.Any) error {
-		resp := v.(*pole_rpc.ServerResponse)
+		resp := v.(*polerpc.ServerResponse)
 		supplier := rpc.GlobalProtoRegistry.FindProtoMessageSupplier(resp.FunName)
 		bzResp := supplier()
 		if err := ptypes.UnmarshalAny(resp.Body, supplier()); err != nil {

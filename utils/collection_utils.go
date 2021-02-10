@@ -24,7 +24,7 @@ type ConcurrentSlice struct {
 	capacity int32
 	size     int32
 	cursor   int32
-	values []interface{}
+	values   []interface{}
 }
 
 func (cs *ConcurrentSlice) Remove(v interface{}) {

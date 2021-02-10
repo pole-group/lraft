@@ -27,14 +27,19 @@ func (rt ReplicatorType) IsLearner() bool {
 }
 
 type ReplicatorGroup struct {
-	replicators        *utils.ConcurrentMap // <string, *Replicator>
+	node               *nodeImpl
 	raftOpt            RaftOptions
 	commonOptions      *replicatorOptions
+	replicators        *utils.ConcurrentMap // <string, *Replicator>
 	failureReplicators *utils.ConcurrentMap // <string, ReplicatorType>
 }
 
+//checkReplicator 检查跟随者、学习者的复制信息，只能由 Leader 节点进行处理
 func (rpg *ReplicatorGroup) checkReplicator(peer entity.PeerId, lockNode bool) {
-	replicator := rpg.GetReplicator(peer)
+	if rpg.node.state != StateLeader {
+		return
+	}
+	replicator := rpg.getReplicator(peer)
 	if replicator == nil {
 		node := rpg.commonOptions.node
 		defer func() {
@@ -47,10 +52,11 @@ func (rpg *ReplicatorGroup) checkReplicator(peer entity.PeerId, lockNode bool) {
 		}
 		if node.IsLeader() {
 			rType := rpg.failureReplicators.Get(peer.GetDesc())
-			if rType != nil {
-				if ok, _ := rpg.AddReplicator(peer, rType.(ReplicatorType), false); ok {
-					rpg.failureReplicators.Remove(peer.GetDesc())
-				}
+			if rType == nil {
+				return
+			}
+			if ok, _ := rpg.addReplicator(peer, rType.(ReplicatorType), false); ok {
+				rpg.failureReplicators.Remove(peer.GetDesc())
 			}
 		}
 	}
@@ -66,7 +72,7 @@ func (rpg *ReplicatorGroup) transferLeadershipTo(peer entity.PeerId, lastLogInde
 
 //sendHeartbeat
 func (rpg *ReplicatorGroup) sendHeartbeat(peer entity.PeerId, closure *AppendEntriesResponseClosure) {
-	replicator := rpg.GetReplicator(peer)
+	replicator := rpg.getReplicator(peer)
 	if replicator == nil {
 		if closure != nil {
 			closure.Run(entity.NewStatus(entity.EHostDown, fmt.Sprintf("peer %s is not connected", peer.GetDesc())))
@@ -76,17 +82,21 @@ func (rpg *ReplicatorGroup) sendHeartbeat(peer entity.PeerId, closure *AppendEnt
 	replicator.sendHeartbeat(closure)
 }
 
-func (rpg *ReplicatorGroup) resetTerm(term int64)  {
-	// TODO
+func (rpg *ReplicatorGroup) resetTerm(newTerm int64) bool {
+	if newTerm <= rpg.commonOptions.term {
+		return false
+	}
+	rpg.commonOptions.term = newTerm
+	return true
 }
 
-//GetReplicator
-func (rpg *ReplicatorGroup) GetReplicator(peer entity.PeerId) *Replicator {
+//getReplicator
+func (rpg *ReplicatorGroup) getReplicator(peer entity.PeerId) *Replicator {
 	return rpg.replicators.Get(peer.GetDesc()).(*Replicator)
 }
 
-//AddReplicator 添加一个复制者
-func (rpg *ReplicatorGroup) AddReplicator(peer entity.PeerId, replicatorType ReplicatorType, sync bool) (bool, error) {
+//addReplicator 添加一个复制者
+func (rpg *ReplicatorGroup) addReplicator(peer entity.PeerId, replicatorType ReplicatorType, sync bool) (bool, error) {
 	if err := utils.RequireTrue(rpg.commonOptions.term != 0, "term is zero"); err != nil {
 		return false, err
 	}
@@ -107,7 +117,7 @@ func (rpg *ReplicatorGroup) AddReplicator(peer entity.PeerId, replicatorType Rep
 		}
 	}
 
-	replicator := NewReplicator(opts, rpg.raftOpt)
+	replicator := newReplicator(opts, rpg.raftOpt)
 	if ok, err := replicator.Start(); !ok || err != nil {
 		utils.RaftLog.Error("fail to startJob replicator to peer=%s, replicatorType=%", peer.GetDesc(), replicatorType)
 		return false, err
@@ -168,8 +178,18 @@ func (rpg *ReplicatorGroup) findTheNextCandidate(conf *entity.ConfigurationEntry
 	return peer
 }
 
+//sendTimeoutNowAndStop
 func (rpg *ReplicatorGroup) sendTimeoutNowAndStop(replicator *Replicator, electionTimeoutMs int64) {
 
+}
+
+func (rpg *ReplicatorGroup) stopTransferLeadership(peer entity.PeerId) bool {
+	val := rpg.replicators.Get(peer.GetDesc())
+	if val == nil {
+		return false
+	}
+	replicator := val.(*Replicator)
+	return replicator.stopTransferLeadership()
 }
 
 func (rpg *ReplicatorGroup) stopAll() {

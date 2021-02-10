@@ -314,12 +314,12 @@ func (rrc *RpcResponseClosure) Run(status entity.Status) {
 
 type RpcRequestClosure struct {
 	state       int32
-	rpcCtx      *rpc.RpcContext
+	rpcCtx      *rpc.RPCContext
 	defaultResp *polerpc.ServerResponse
 	F           func(status entity.Status)
 }
 
-func NewRpcRequestClosure(rpcCtx *rpc.RpcContext) *RpcRequestClosure {
+func NewRpcRequestClosure(rpcCtx *rpc.RPCContext) *RpcRequestClosure {
 	return &RpcRequestClosure{
 		state:       RpcPending,
 		rpcCtx:      rpcCtx,
@@ -327,7 +327,7 @@ func NewRpcRequestClosure(rpcCtx *rpc.RpcContext) *RpcRequestClosure {
 	}
 }
 
-func NewRpcRequestClosureWithDefaultResp(rpcCtx *rpc.RpcContext, defaultResp *polerpc.ServerResponse) *RpcRequestClosure {
+func NewRpcRequestClosureWithDefaultResp(rpcCtx *rpc.RPCContext, defaultResp *polerpc.ServerResponse) *RpcRequestClosure {
 	return &RpcRequestClosure{
 		state:       RpcPending,
 		rpcCtx:      rpcCtx,
@@ -335,7 +335,7 @@ func NewRpcRequestClosureWithDefaultResp(rpcCtx *rpc.RpcContext, defaultResp *po
 	}
 }
 
-func (rrc *RpcRequestClosure) GetRpcCtx() *rpc.RpcContext {
+func (rrc *RpcRequestClosure) GetRpcCtx() *rpc.RPCContext {
 	return rrc.rpcCtx
 }
 

@@ -4,7 +4,7 @@
 
 syntax = "proto3";
 
-package core;
+package proto;
 
 enum FileSource {
   FILE_SOURCE_LOCAL = 0;

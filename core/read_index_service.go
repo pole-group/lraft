@@ -80,7 +80,7 @@ func (rop *ReadOnlyOperator) addRequest(reqCtx []byte, done *ReadIndexClosure) {
 }
 
 //OnApplied 监听当前状态机已经将哪一些 core.LogEntry 给 apply 成功了, 这里传入了当前最新的, appliedLogIndex
-func (rop *ReadOnlyOperator) OnApplied(lastAppliedLogIndex int64) () {
+func (rop *ReadOnlyOperator) OnApplied(lastAppliedLogIndex int64) {
 	notifyList := list.New()
 
 	defer func() {

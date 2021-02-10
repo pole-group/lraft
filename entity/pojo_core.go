@@ -370,7 +370,7 @@ func (le *LogEntry) Encode() []byte {
 		Peers:       le.encodePeers(le.Peers),
 		OldPeers:    le.encodePeers(le.OldPeers),
 		Data:        le.Data,
-		Checksum:    int64(le.Checksum()),
+		Checksum:    le.Checksum(),
 		Learners:    le.encodePeers(le.Learners),
 		OldLearners: le.encodePeers(le.OldLearners),
 	}

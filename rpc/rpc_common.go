@@ -5,24 +5,29 @@
 package rpc
 
 import (
-	"errors"
 	"sync"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/jjeffcaii/reactor-go/flux"
 	"github.com/jjeffcaii/reactor-go/mono"
-	pole_rpc "github.com/pole-group/pole-rpc"
+	polerpc "github.com/pole-group/pole-rpc"
 
 	raft "github.com/pole-group/lraft/proto"
 )
 
 const (
 	// cli command
-	CliAddLearnerRequest     string = "CliAddLearnerCommand"
+	// 添加一个学习者的命令
+	CliAddLearnerRequest string = "CliAddLearnerCommand"
+	// 添加一个成员的命令
 	CliAddPeerRequest        string = "CliAddPeerCommand"
+	// 更改成员的命令
 	CliChangePeersRequest    string = "CliChangePeersCommand"
+	// 获取 Leader 的命令
 	CliGetLeaderRequest      string = "CliGetLeaderCommand"
+	// 获取所有的成员
 	CliGetPeersRequest       string = "CliGetPeersCommand"
+	// 批量移除学习者
 	CliRemoveLearnersRequest string = "CliRemoveLearnersCommand"
 	CliResetLearnersRequest  string = "CliResetLearnersCommand"
 	CliResetPeersRequest     string = "CliResetPeersCommand"
@@ -43,28 +48,27 @@ const (
 	CommonRpcErrorCommand string = "CommonRpcErrorCommand"
 )
 
-var (
-	EmptyBytes     []byte = make([]byte, 0)
-	ServerNotFount        = errors.New("target server not found")
-)
-
+//RequestIDKey 每次请求的唯一标识
 const RequestIDKey string = "RequestID"
 
-type RpcContext struct {
+//RPCContext 请求上下文
+type RPCContext struct {
 	onceSink mono.Sink
 	manySink flux.Sink
 	Values   map[interface{}]interface{}
 }
 
-func NewCtxPole() *RpcContext {
-	return &RpcContext{
+//NewRPCCtx 创建一个新的 RPCContext
+func NewRPCCtx() *RPCContext {
+	return &RPCContext{
 		Values: make(map[interface{}]interface{}),
 	}
 }
 
-func (c *RpcContext) SendMsg(msg *pole_rpc.ServerResponse) {
-	reqId := c.Value("RequestIDKey").(string)
-	msg.RequestId = reqId
+//SendMsg 发送一个响应
+func (c *RPCContext) SendMsg(msg *polerpc.ServerResponse) {
+	reqID := c.Value(RequestIDKey).(string)
+	msg.RequestId = reqID
 	if c.onceSink != nil {
 		c.onceSink.Success(msg)
 	}
@@ -73,27 +77,33 @@ func (c *RpcContext) SendMsg(msg *pole_rpc.ServerResponse) {
 	}
 }
 
-func (c *RpcContext) Write(key, value interface{}) {
+//Write 追加一个 attachment 到 RPCContext
+func (c *RPCContext) Write(key, value interface{}) {
 	c.Values[key] = value
 }
 
-func (c *RpcContext) Value(key interface{}) interface{} {
+//Value 获取上下文的 attachment
+func (c *RPCContext) Value(key interface{}) interface{} {
 	return c.Values[key]
 }
 
-func (c *RpcContext) Close() {
+//Close 关闭一个Rpc请求上下文
+func (c *RPCContext) Close() {
 	if c.manySink != nil {
 		c.manySink.Complete()
 	}
 }
 
+//GlobalProtoRegistry 全局的 proto.Message supplier 的仓库
 var GlobalProtoRegistry *ProtobufMessageRegistry
 
+//ProtobufMessageRegistry 用于自动化的将字节数组转换为业务结构体
 type ProtobufMessageRegistry struct {
 	rwLock   sync.RWMutex
 	registry map[string]func() proto.Message
 }
 
+//RegistryProtoMessageSupplier 注册一个 proto.Message 对象构造者
 func (pmr *ProtobufMessageRegistry) RegistryProtoMessageSupplier(key string, supplier func() proto.Message) bool {
 	defer pmr.rwLock.Unlock()
 	pmr.rwLock.Lock()
@@ -104,6 +114,7 @@ func (pmr *ProtobufMessageRegistry) RegistryProtoMessageSupplier(key string, sup
 	return false
 }
 
+//FindProtoMessageSupplier 根据名称找到 proto.Message 的对象构造者，每次调用对象构造者，会创建出一个新的 proto.Message
 func (pmr *ProtobufMessageRegistry) FindProtoMessageSupplier(key string) func() proto.Message {
 	defer pmr.rwLock.RUnlock()
 	pmr.rwLock.RLock()

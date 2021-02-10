@@ -14,12 +14,11 @@ import (
 )
 
 var (
-	ErrorEventNotRegister = errors.New("the event was not registered")
-	ErrorEventRegister    = errors.New("register event publisher failed")
-	ErrorAddSubscriber    = errors.New("add subscriber failed")
-	publisherCenter       *PublisherCenter
-	publisherOnce         sync.Once
-
+	ErrorEventNotRegister     = errors.New("the event was not registered")
+	ErrorEventRegister        = errors.New("register event publisher failed")
+	ErrorAddSubscriber        = errors.New("add subscriber failed")
+	publisherCenter           *PublisherCenter
+	publisherOnce             sync.Once
 	defaultFastRingBufferSize = GetInt64FromEnvOptional("github.com/pole-group/lraft.notify.fast-event-buffer.size", 16384)
 )
 
