@@ -134,3 +134,9 @@ func StringFormat(format string, args ...interface{}) string {
 	CheckErr(err)
 	return string(buf.Bytes())
 }
+
+func GetInt64FormBytes(memory []byte, index int) int64 {
+	return int64(memory[index]&0xff)<<56 | int64(memory[index+1]&0xff)<<48 | int64(
+		memory[index+2]&0xff)<<40 | int64(memory[index+3]&0xff)<<32 | int64(memory[index+4]&0xff)<<24 | int64(
+		memory[index+5]&0xff)<<16 | int64(memory[index+6]&0xff)<<8 | int64(memory[index+7]&0xff)
+}

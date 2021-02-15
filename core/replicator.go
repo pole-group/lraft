@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"math"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	polerpc "github.com/pole-group/pole-rpc"
@@ -56,11 +55,11 @@ const (
 )
 
 type ReplicatorStateListener interface {
-	OnCreate(peer *entity.PeerId)
+	OnCreate(peer entity.PeerId)
 
-	OnError(peer *entity.PeerId, st entity.Status)
+	OnError(peer entity.PeerId, st entity.Status)
 
-	OnDestroyed(peer *entity.PeerId)
+	OnDestroyed(peer entity.PeerId)
 }
 
 type Stat struct {
@@ -80,21 +79,9 @@ type InFlight struct {
 	seq        int64
 }
 
+//isSendingLogEntries
 func (ifl *InFlight) isSendingLogEntries() bool {
 	return ifl.reqType == RequestTypeForAppendEntries && ifl.reqCnt > 0
-}
-
-type RpcResponse struct {
-	status      entity.Status
-	req         *proto.Message
-	resp        *proto.Message
-	rpcSendTime int64
-	seq         int64
-	reqType     RequestType
-}
-
-func (rp *RpcResponse) Compare(other *RpcResponse) int {
-	return int(rp.seq - other.seq)
 }
 
 //Replicator 这个对象本身，是一个临界资源，log的发送要是竞争的
@@ -138,6 +125,10 @@ type rpcResponse struct {
 	requestType RequestType
 }
 
+func (rp *rpcResponse) Compare(other *rpcResponse) int {
+	return int(rp.seq - other.seq)
+}
+
 // IntHeap 是一个由整数组成的最小堆。
 type responseHeap []rpcResponse
 
@@ -170,6 +161,7 @@ func (h *responseHeap) Pop() interface{} {
 	return x
 }
 
+//newReplicator 创建一个新的复制者
 func newReplicator(opts *replicatorOptions, raftOpts RaftOptions) *Replicator {
 	return &Replicator{
 		lock:             &sync.Mutex{},
@@ -182,7 +174,8 @@ func newReplicator(opts *replicatorOptions, raftOpts RaftOptions) *Replicator {
 	}
 }
 
-func (r *Replicator) Start() (bool, error) {
+//start 启动复制者
+func (r *Replicator) start() (bool, error) {
 	if ok, err := r.raftOperator.raftClient.CheckConnection(r.options.peerId.GetEndpoint()); !ok || err != nil {
 		utils.RaftLog.Error("fail init sending channel to %s", r.options.peerId.GetDesc())
 		return ok, err
@@ -197,11 +190,12 @@ func (r *Replicator) Start() (bool, error) {
 	return true, nil
 }
 
-func (r *Replicator) Stop() {
+//stop 停止一个 Replicator
+func (r *Replicator) stop() {
 
 }
 
-//addInFlights
+//addInFlights 当 Leader 发送一个 Rpc 请求给 Follower 或者 Learner 时，会创建一个对应的 InFlight 对应本次的发送请求动作
 func (r *Replicator) addInFlights(reqType RequestType, startIndex int64, cnt, size int32, seq int64,
 	rpcInFly polerpc.Future) {
 	r.rpcInFly = &InFlight{
@@ -249,6 +243,19 @@ func (r *Replicator) startHeartbeat(startMs int64) {
 	r.futures.Add(future)
 }
 
+//transferLeadership 转移 Leader 任期，需要通知其他所有的 Replicator
+func (r *Replicator) transferLeadership(logIndex int64) (bool, error) {
+	r.lock.Lock()
+	if r.hasSucceeded && r.nextIndex > logIndex {
+		r.sendTimeoutNow(true, false)
+		return true, nil
+	}
+	r.timeoutNowIndex = logIndex
+	r.lock.Unlock()
+	return true, nil
+}
+
+//setError Replicator 出现异常
 func (r *Replicator) setError(errCode entity.RaftErrorCode) {
 	if r.destroy {
 		return
@@ -261,6 +268,7 @@ func (r *Replicator) setError(errCode entity.RaftErrorCode) {
 	onError(r, errCode)
 }
 
+//stopTransferLeadership 停止 Leader 任期的转移
 func (r *Replicator) stopTransferLeadership() bool {
 	defer r.lock.Unlock()
 	r.lock.Lock()
@@ -275,7 +283,28 @@ func (r *Replicator) installSnapshot() {
 }
 
 func (r *Replicator) sendTimeoutNow(unlockId, stopAfterFinish bool) {
+	req := new(raft.TimeoutNowRequest)
+	req.Term = r.options.term
+	req.GroupID = r.options.groupID
+	req.ServerID = r.options.serverId.GetDesc()
+	req.PeerID = r.options.peerId.GetDesc()
 
+	defer func() {
+		if unlockId {
+			r.lock.Unlock()
+		}
+	}()
+
+	mo := r.raftOperator.TimeoutNow(r.options.peerId.GetEndpoint(), req,
+		&TimeoutNowResponseClosure{RpcResponseClosure{F: func(resp proto.Message, status entity.Status) {
+			r.onTimeoutNowReturned(status, req, resp.(*raft.TimeoutNowResponse), stopAfterFinish)
+		}}})
+	future := polerpc.NewMonoFuture(mo)
+
+	if !stopAfterFinish {
+		r.timeoutNowInFly = future
+		r.timeoutNowIndex = 0
+	}
 }
 
 //sendEmptyEntries 发送一个空的LogEntry，用于心跳或者探测
@@ -285,7 +314,6 @@ func (r *Replicator) sendEmptyEntries(isHeartbeat bool, heartbeatClosure *Append
 		r.installSnapshot()
 		return
 	}
-
 	// 结束当前对复制者的信息发送，需要解放当前的 Replicator
 	defer r.lock.Unlock()
 
@@ -294,7 +322,7 @@ func (r *Replicator) sendEmptyEntries(isHeartbeat bool, heartbeatClosure *Append
 	if isHeartbeat {
 		r.heartbeatCounter++
 		heartbeatDone = utils.IF(heartbeatClosure == nil, &AppendEntriesResponseClosure{RpcResponseClosure{F: func(resp proto.Message, status entity.Status) {
-			r.onHeartbeatReqReturn(status, heartbeatClosure.Resp.(*raft.AppendEntriesResponse), sendTime)
+			r.onHeartbeatReturn(status, heartbeatClosure.Resp.(*raft.AppendEntriesResponse), sendTime)
 		}}}, heartbeatClosure).(*AppendEntriesResponseClosure)
 
 		r.heartbeatInFly = polerpc.NewMonoFuture(r.raftOperator.AppendEntries(r.options.peerId.GetEndpoint(), req,
@@ -305,7 +333,7 @@ func (r *Replicator) sendEmptyEntries(isHeartbeat bool, heartbeatClosure *Append
 		r.statInfo.firstLogIndex = r.nextIndex
 		r.statInfo.lastLogIncluded = r.nextIndex - 1
 		r.appendEntriesCounter++
-		atomic.StoreInt32((*int32)(&r.state), int32(ReplicatorProbe))
+		r.state = ReplicatorProbe
 		stateVersion := r.version
 		reqSeq := r.getAndIncrementReqSeq()
 
@@ -323,6 +351,7 @@ func (r *Replicator) sendEmptyEntries(isHeartbeat bool, heartbeatClosure *Append
 		r.options.node.nodeID.GetDesc(), r.options.peerId.GetDesc(), r.options.term, req.CommittedIndex)
 }
 
+//onRpcReturned 处理所有的 Rpc 返回消息
 func (r *Replicator) onRpcReturned(reqType RequestType, status entity.Status, req, resp proto.Message,
 	seq int64, stateVersion int32, rpcSendTime time.Time) {
 	startMs := time.Now()
@@ -384,6 +413,8 @@ func (r *Replicator) onRpcReturned(reqType RequestType, status entity.Status, re
 			utils.RaftLog.Debug("ignore this response %#v because request's inFlight can't find", resp.response)
 			continue
 		}
+
+		//发送序列号不匹配，这里有问题，需要重新处理
 		if inFlight.seq != resp.seq {
 			r.resetInFlights()
 			r.state = ReplicatorProbe
@@ -505,14 +536,15 @@ func (r *Replicator) sendNextEntries(nextSendingIndex int64) bool {
 	return true
 }
 
-//sendHeartbeat
+//sendHeartbeat 发送一个心跳数据信息到 Follower
 func (r *Replicator) sendHeartbeat(closure *AppendEntriesResponseClosure) {
 	r.lock.Lock()
 	r.sendEmptyEntries(true, closure)
 }
 
-//resetInFlights
+//resetInFlights 只要是 request <-> response 之间的元数据信息对不上，就需要重置这个 Replicator 的基本信息数据
 func (r *Replicator) resetInFlights() {
+	//需要更新 Replicator 自己的版本信息，即标示自己的元数据信息已经被更新过一次了
 	r.version++
 	r.inFlights = list.New()
 	r.pendingResponses = &responseHeap{}
@@ -527,25 +559,180 @@ func (r *Replicator) resetInFlights() {
 	}
 }
 
-//onAppendEntriesReturned
+//onAppendEntriesReturned AppendEntriesResponse 响应返回的处理
 func (r *Replicator) onAppendEntriesReturned(inFlight *InFlight, st entity.Status, req *raft.AppendEntriesRequest,
 	resp *raft.AppendEntriesResponse, rpcSendTime, startMs time.Time) bool {
 
-	return false
+	//序号不匹配
+	if inFlight.startIndex != req.PrevLogIndex+1 {
+		r.resetInFlights()
+		r.state = ReplicatorProbe
+		r.sendEmptyEntries(false, nil)
+		return false
+	}
+
+	if !st.IsOK() {
+		notifyReplicatorStatusListener(r, ReplicatorErrorEvent, st)
+		r.consecutiveErrorTimes++
+		if r.consecutiveErrorTimes%10 == 0 {
+			utils.RaftLog.Warn("Fail to issue RPC to %s, consecutiveErrorTimes=%d, error=%s",
+				r.options.peerId.GetDesc(), r.consecutiveErrorTimes, st)
+		}
+		r.resetInFlights()
+		r.state = ReplicatorProbe
+		block(r, st.GetCode(), startMs)
+		return false
+	}
+
+	r.consecutiveErrorTimes = 0
+	if !resp.Success {
+		if resp.Term > r.options.term {
+			node := r.options.node
+			notifyOnCaughtUp(r, entity.EPERM, true)
+			r.shutdown()
+			node.increaseTermTo(resp.Term, entity.NewStatus(entity.EHigherTermResponse,
+				fmt.Sprintf("leader receives higher term appendentries_response from peer : %s",
+					r.options.peerId.GetDesc())))
+			return false
+		}
+
+		if rpcSendTime.Unix()*1000 > r.lastRpcSendTimestamp {
+			r.lastRpcSendTimestamp = rpcSendTime.Unix() * 1000
+		}
+		r.resetInFlights()
+
+		// 这里是 Raft 大论文的一个优化，由 Follower 自己根据 Leader 的 LogIndex 去倒推 match 的 LogIndex，然后设置自己的 LastLogIndex
+		//位点信息数据，减少整体的RPC交互次数，降低在RPC上的网络开销
+		if resp.LastLogIndex+1 < r.nextIndex {
+			r.nextIndex = resp.LastLogIndex + 1
+		} else {
+			if r.nextIndex > 1 {
+				utils.RaftLog.Debug("logIndex=%d disMatch", r.nextIndex)
+				r.nextIndex--
+			} else {
+				utils.RaftLog.Error("peer=%s declares that log at index=0 doesn't match, "+
+					"which is not supposed to happen", r.options.peerId.GetDesc())
+			}
+		}
+		r.sendEmptyEntries(false, nil)
+		return false
+	}
+
+	if resp.Term != r.options.term {
+		r.resetInFlights()
+		r.state = ReplicatorProbe
+		utils.RaftLog.Error("fail, response term %d disMatch, expect term %d", resp.Term, r.options.term)
+		r.lock.Unlock()
+		return false
+	}
+
+	if rpcSendTime.Unix()*1000 > r.lastRpcSendTimestamp {
+		r.lastRpcSendTimestamp = rpcSendTime.Unix() * 1000
+	}
+	entries := len(req.Entries)
+	if entries > 0 {
+		if r.options.replicatorType == ReplicatorFollower {
+			r.options.ballotBox.CommitAt(r.nextIndex, r.nextIndex+int64(entries)+1, r.options.peerId)
+		}
+	}
+
+	r.state = ReplicatorReplicate
+	r.hasSucceeded = true
+	r.blockFuture = nil
+	r.nextIndex += int64(entries)
+	notifyOnCaughtUp(r, entity.SUCCESS, false)
+	if r.timeoutNowIndex > 0 && r.timeoutNowIndex < r.nextIndex {
+		r.sendTimeoutNow(false, false)
+	}
+	return true
 }
 
-//onVoteReqReturn
-func (r *Replicator) onVoteReqReturn(resp *raft.RequestVoteResponse) {
-}
+//onHeartbeatReturn 处理心跳包响应，follower、learner 会将自己的 Term 信息放在 HeartbeatResponse 中告诉给 Leader
+func (r *Replicator) onHeartbeatReturn(st entity.Status, resp *raft.AppendEntriesResponse, rpcSendTime time.Time) {
+	startTimeMs := utils.GetCurrentTimeMs()
 
-//onHeartbeatReqReturn
-func (r *Replicator) onHeartbeatReqReturn(status entity.Status, resp *raft.AppendEntriesResponse, sendTime time.Time) {
+	r.lock.Lock()
+	doUnlock := true
+
+	if !st.IsOK() {
+		r.state = ReplicatorProbe
+		notifyReplicatorStatusListener(r, ReplicatorErrorEvent, st)
+		r.consecutiveErrorTimes ++
+		if r.consecutiveErrorTimes % 10 == 0 {
+			utils.RaftLog.Warn("fail to issue RPC to %s, consecutiveErrorTimes=%d, error=%s",
+				r.options.peerId.GetDesc(), r.consecutiveErrorTimes, st)
+		}
+		r.startHeartbeat(startTimeMs)
+		return
+	}
+
+	r.consecutiveErrorTimes = 0
+	if resp.Term > r.options.term {
+		node := r.options.node
+		notifyOnCaughtUp(r, entity.EPERM, true)
+		r.shutdown()
+		node.increaseTermTo(resp.Term, entity.NewStatus(entity.EHigherTermResponse,
+			fmt.Sprintf("leader receives higher term heartbeat_response from peer : %s", r.options.peerId.GetDesc())))
+		return
+	}
+
+	if !resp.Success && resp.LastLogIndex > 0 {
+		utils.RaftLog.Warn("heartbeat to peer %s failure, try to send a probe request.", r.options.peerId.GetDesc())
+		doUnlock = false
+		r.sendEmptyEntries(false, nil)
+		r.startHeartbeat(startTimeMs)
+		return
+	}
+
+	if rpcSendTime.Unix()*1000 > r.lastRpcSendTimestamp {
+		r.lastRpcSendTimestamp = rpcSendTime.Unix() * 1000
+	}
+	r.startHeartbeat(startTimeMs)
+
+	defer func() {
+		if doUnlock {
+			r.lock.Unlock()
+		}
+	}()
 }
 
 //onInstallSnapshotReqReturn
 func (r *Replicator) onInstallSnapshotReqReturn(st entity.Status, req *raft.InstallSnapshotRequest,
 	resp *raft.InstallSnapshotResponse) bool {
 	return false
+}
+
+//onTimeoutNowReturned 处理 TimeoutNowResponse 的消息
+func (r *Replicator) onTimeoutNowReturned(st entity.Status, req *raft.TimeoutNowRequest,
+	resp *raft.TimeoutNowResponse, stopAfterFinish bool) {
+	r.lock.Lock()
+
+	if !st.IsOK() {
+		notifyReplicatorStatusListener(r, ReplicatorErrorEvent, st)
+		if stopAfterFinish {
+			notifyOnCaughtUp(r, entity.EStop, true)
+			r.shutdown()
+		} else {
+			r.lock.Unlock()
+		}
+		return
+	}
+
+	if resp.Term > r.options.term {
+		node := r.options.node
+		notifyOnCaughtUp(r, entity.EPERM, true)
+		r.shutdown()
+		node.increaseTermTo(resp.Term, entity.NewStatus(entity.EHigherTermResponse,
+			fmt.Sprintf("leader receives higher term timeout_now_response from peer : %s", r.options.peerId.GetDesc())))
+		return
+	}
+
+	if stopAfterFinish {
+		notifyOnCaughtUp(r, entity.EStop, true)
+		r.shutdown()
+	} else {
+		r.lock.Unlock()
+	}
 }
 
 func (r *Replicator) getAndIncrementReqSeq() int64 {
@@ -573,7 +760,7 @@ func (rw *replicatorWait) OnNewLog(arg *Replicator, errCode entity.RaftErrorCode
 }
 
 func (r *Replicator) waitMoreEntries(nextWaitIndex int64) {
-	utils.RaftLog.Debug("node {} waits more entries", r.options.node.nodeID.GetDesc())
+	utils.RaftLog.Debug("node %s waits more entries", r.options.node.nodeID.GetDesc())
 	defer r.lock.Unlock()
 	if r.waitId >= 0 {
 		return
@@ -592,7 +779,7 @@ func (r *Replicator) continueSending(errCode entity.RaftErrorCode) {
 	} else if errCode != entity.EStop {
 		r.sendEntries()
 	} else {
-		utils.RaftLog.Warn("replicator {} stops sending entries.", r)
+		utils.RaftLog.Warn("replicator %s stops sending entries.", r)
 		r.lock.Unlock()
 	}
 }
@@ -684,12 +871,47 @@ func (r *Replicator) shutdown() {
 	})
 }
 
-func notifyOnCaughtUp(r *Replicator, errCode entity.RaftErrorCode) {
+func notifyOnCaughtUp(r *Replicator, errCode entity.RaftErrorCode, beforeDestroy bool) {
 
 }
 
 func notifyReplicatorStatusListener(r *Replicator, event ReplicatorEvent, st entity.Status) {
+	node := r.options.node
+	peer := r.options.peerId
+	listeners := node.replicatorStateListeners
 
+	for _, listener := range listeners {
+		param := make(map[string]interface{})
+		param["peer"] = peer
+		param["listener"] = listener
+		param["status"] = st
+		switch event {
+		case ReplicatorCreatedEvent:
+			polerpc.Go(param, func(arg interface{}) {
+				p := arg.(map[string]interface{})
+				peer := p["peer"].(entity.PeerId)
+				listener := p["listener"].(ReplicatorStateListener)
+				listener.OnCreate(peer)
+			})
+		case ReplicatorDestroyedEvent:
+			polerpc.Go(param, func(arg interface{}) {
+				p := arg.(map[string]interface{})
+				peer := p["peer"].(entity.PeerId)
+				listener := p["listener"].(ReplicatorStateListener)
+				listener.OnDestroyed(peer)
+			})
+		case ReplicatorErrorEvent:
+			polerpc.Go(param, func(arg interface{}) {
+				p := arg.(map[string]interface{})
+				peer := p["peer"].(entity.PeerId)
+				listener := p["listener"].(ReplicatorStateListener)
+				status := p["status"].(entity.Status)
+				listener.OnError(peer, status)
+			})
+		default:
+			//do nothing
+		}
+	}
 }
 
 //TODO 这一段逻辑的作用
@@ -716,7 +938,7 @@ func block(r *Replicator, errCode entity.RaftErrorCode, startMs time.Time) {
 
 //onBlockTimeout 超时需要做的事情
 func onBlockTimeout(r *Replicator) {
-	polerpc.GoEmpty(func() {
+	polerpc.Go(nil, func(arg interface{}) {
 		r.continueSending(entity.ERaftTimedOut)
 	})
 }
@@ -761,7 +983,7 @@ func onError(r *Replicator, errCode entity.RaftErrorCode) {
 			if r.waitId >= 0 {
 				r.options.logMgn.RemoveWaiter(r.waitId)
 			}
-			notifyOnCaughtUp(r, errCode)
+			notifyOnCaughtUp(r, errCode, true)
 			ele = val.Next()
 		}
 	default:

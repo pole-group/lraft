@@ -667,6 +667,10 @@ func (node *nodeImpl) resetLeaderId(newLeaderId entity.PeerId, status entity.Sta
 	}
 }
 
+func (node *nodeImpl) increaseTermTo(term int64, st entity.Status) {
+
+}
+
 func (node *nodeImpl) GetQuorum() int {
 	c := node.conf.GetConf()
 	if c.IsEmpty() {

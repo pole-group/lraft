@@ -8,7 +8,6 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"fmt"
 	"net"
 	"reflect"
 	"sync"
@@ -67,7 +66,7 @@ func (r *RSocketDispatcher) createRequestResponseSocket() rsocket.OptAbstractSoc
 					return payload.New(bs, EmptyBytes), nil
 				}
 			})).DoOnError(func(e error) {
-				fmt.Printf("an exception occurred while processing the request %s\n", err)
+				RpcLog.Error("an exception occurred while processing the request : %#v", e)
 			})
 		}
 		return mono.Error(ErrorNotImplement)
@@ -92,14 +91,18 @@ func (r *RSocketDispatcher) createRequestChannelSocket() rsocket.OptAbstractSock
 				}
 				if err != nil {
 					rpcCtx.Send(&ServerResponse{
-						Code:      0,
-						Msg:       err.Error(),
+						Code: 0,
+						Msg:  err.Error(),
 					})
 				}
 				return nil
 			}).
 			DoOnError(func(e error) {
-				panic(e)
+				RpcLog.Error("an exception occurred while processing the request : %#v", e)
+				rpcCtx.Send(&ServerResponse{
+					Code: -1,
+					Msg:  e.Error(),
+				})
 			}).
 			Subscribe(context.Background())
 
@@ -117,7 +120,12 @@ func (r *RSocketDispatcher) createRequestChannelSocket() rsocket.OptAbstractSock
 			} else {
 				return payload.New(bs, EmptyBytes), nil
 			}
-		}))
+		})).DoOnComplete(func() {
+			rpcCtx.Complete()
+		}).DoOnError(func(e error) {
+			rpcCtx.Complete()
+			RpcLog.Error("occur error : %#v", e)
+		})
 	})
 }
 

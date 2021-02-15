@@ -15,18 +15,20 @@ import (
 	"github.com/jjeffcaii/reactor-go/mono"
 )
 
-func GoEmpty(work func()) {
-	DefaultScheduler.Submit(work)
-}
-
-func Go(ctx context.Context, work func(ctx context.Context)) {
-	go work(ctx)
+//Go 将一个方法异步放入协程池中执行
+func Go(arg interface{}, work func(arg interface{})) {
+	DefaultScheduler.Submit(Job{
+		f:   work,
+		arg: arg,
+	})
 }
 
 // DoTickerSchedule 利用 time.Timer 实现的周期执行，其中每次任务执行的间隔是可以动态调整的，通过 supplier func() time.Duration 函数
+// 如果在 work 方法运行期间出现 panic，则无法保证任务可以继续正常执行，因此需要 work 自行 defer 去 recover 住 panic 的 Error 信息并进行处理
 func DoTimerSchedule(work func(), delay time.Duration, supplier func() time.Duration) Future {
 	ctx, cancel := context.WithCancel(context.Background())
-	Go(ctx, func(ctx context.Context) {
+	Go(ctx, func(arg interface{}) {
+		ctx := arg.(context.Context)
 		timer := time.NewTimer(delay)
 		for {
 			select {
@@ -41,10 +43,11 @@ func DoTimerSchedule(work func(), delay time.Duration, supplier func() time.Dura
 	return NewCtxFuture(ctx, cancel)
 }
 
-// DoTickerSchedule 利用 time.Ticker 实现的周期执行
+// DoTickerSchedule 利用 time.Ticker 实现的固定周期的执行
 func DoTickerSchedule(work func(), delay time.Duration) Future {
 	ctx, cancel := context.WithCancel(context.Background())
-	Go(ctx, func(ctx context.Context) {
+	Go(ctx, func(arg interface{}) {
+		ctx := arg.(context.Context)
 		ticker := time.NewTicker(delay)
 		for {
 			select {
@@ -62,7 +65,8 @@ func DoTickerSchedule(work func(), delay time.Duration) Future {
 func DelaySchedule(work func(), delay time.Duration) Future {
 	ctx, cancel := context.WithCancel(context.Background())
 	after := time.After(delay)
-	Go(ctx, func(ctx context.Context) {
+	Go(ctx, func(arg interface{}) {
+		ctx := arg.(context.Context)
 		select {
 		case <-ctx.Done():
 			return
@@ -110,8 +114,9 @@ func NewTimeWheel(opt ...Option) *HashTimeWheel {
 	return htw
 }
 
+//Start 必须显示的执行此方法来开启时间轮
 func (htw *HashTimeWheel) Start() {
-	Go(context.Background(), func(ctx context.Context) {
+	Go(context.Background(), func(arg interface{}) {
 		for {
 			select {
 			case <-htw.timeTicker.C:
@@ -244,7 +249,7 @@ func newTimeBucket() *timeBucket {
 		queue:  list.New(),
 		worker: make(chan timeTask, 32),
 	}
-	GoEmpty(tb.execUserTask)
+	go tb.execUserTask()
 	return tb
 }
 
@@ -292,6 +297,11 @@ func (htw *HashTimeWheel) getSlots(d time.Duration) (pos int32, circle int32) {
 	return int32(htw.opts.Tick+delayTime/interval) % htw.opts.SlotNum, int32(delayTime / interval / int64(htw.opts.SlotNum))
 }
 
+type Job struct {
+	f   func(arg interface{})
+	arg interface{}
+}
+
 var DefaultScheduler *RoutinePool = NewRoutinePool(16, 128)
 
 type RoutinePool struct {
@@ -299,7 +309,7 @@ type RoutinePool struct {
 	size         int32
 	cacheSize    int32
 	isRunning    int32
-	taskChan     chan func()
+	taskChan     chan Job
 	workers      []worker
 	panicHandler func(err interface{})
 }
@@ -316,7 +326,7 @@ func NewRoutinePool(size, cacheSize int32) *RoutinePool {
 		size:         size,
 		isRunning:    1,
 		cacheSize:    cacheSize,
-		taskChan:     make(chan func(), cacheSize),
+		taskChan:     make(chan Job, cacheSize),
 		panicHandler: defaultPanicHandler,
 	}
 
@@ -329,7 +339,7 @@ func (rp *RoutinePool) Resize(newSize int32) {
 	defer rp.lock.Unlock()
 	rp.lock.Lock()
 	if newSize < rp.size {
-		newWorkers := make([]worker, newSize, newSize)
+		newWorkers := make([]worker, newSize)
 		i := int32(0)
 		for ; i < newSize; i++ {
 			newWorkers[i] = rp.workers[i]
@@ -342,14 +352,14 @@ func (rp *RoutinePool) Resize(newSize int32) {
 		return
 	}
 	if newSize > rp.size {
-		newWorkers := make([]worker, newSize, newSize)
+		newWorkers := make([]worker, newSize)
 		i := int32(0)
 		for ; i < rp.size; i++ {
 			newWorkers[i] = rp.workers[i]
 		}
 		for ; i < newSize; i++ {
 			newWorkers[i] = worker{owner: rp}
-			GoEmpty(newWorkers[i].run)
+			go newWorkers[i].run()
 		}
 		rp.workers = newWorkers
 		rp.size = newSize
@@ -364,15 +374,15 @@ func (rp *RoutinePool) SetPanicHandler(panicHandler func(err interface{})) {
 
 func (rp *RoutinePool) init() {
 	atomic.StoreInt32(&rp.isRunning, 1)
-	workers := make([]worker, rp.size, rp.size)
+	workers := make([]worker, rp.size)
 	for i := int32(0); i < rp.size; i++ {
 		workers[i] = worker{owner: rp}
-		GoEmpty(workers[i].run)
+		go workers[i].run()
 	}
 }
 
 //Submit(task func()) 提交一个函数任务
-func (rp *RoutinePool) Submit(task func()) {
+func (rp *RoutinePool) Submit(task Job) {
 	rp.taskChan <- task
 }
 
@@ -398,7 +408,7 @@ func (w worker) run() {
 					w.owner.panicHandler(err)
 				}
 			}()
-			task()
+			task.f(task.arg)
 		}
 		deal()
 		if atomic.LoadInt32(&w.owner.isRunning) == int32(0) {

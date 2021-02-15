@@ -14,12 +14,32 @@ const (
 	IndexOutOfBoundErrMsg = "index out of bound, index=%d, offset=%d, pos=%d"
 )
 
+type CSliceOption func(opts *CSliceOptions)
+
+type CSliceOptions struct {
+	capacity int32
+}
+
 type ConcurrentSlice struct {
 	lock     sync.RWMutex
 	capacity int32
 	size     int32
 	cursor   int32
 	values   []interface{}
+}
+
+func NewConcurrentSlice(opts ...CSliceOption) *ConcurrentSlice {
+	cfg := new(CSliceOptions)
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	return &ConcurrentSlice{
+		lock:     sync.RWMutex{},
+		capacity: 0,
+		size:     0,
+		cursor:   0,
+		values:   make([]interface{}, cfg.capacity),
+	}
 }
 
 func (cs *ConcurrentSlice) Remove(v interface{}) {
@@ -39,9 +59,10 @@ func (cs *ConcurrentSlice) Add(v interface{}) {
 	defer cs.lock.Unlock()
 	cs.lock.Lock()
 	if cs.cursor >= cs.capacity {
-		newValues := make([]interface{}, cs.capacity+cs.capacity/2, cs.capacity+cs.capacity/2)
+		newValues := make([]interface{}, cs.capacity+cs.capacity/2)
 		copy(newValues, cs.values)
 		cs.values = newValues
+		cs.capacity = int32(len(cs.values))
 	}
 	cs.values[cs.cursor] = v
 	cs.cursor++
@@ -120,6 +141,39 @@ func (cm *ConcurrentMap) ForEach(consumer func(k, v interface{})) {
 	}
 }
 
+func (cm *ConcurrentMap) Keys() []interface{} {
+	defer cm.rwLock.RUnlock()
+	cm.rwLock.RLock()
+	keys := make([]interface{}, len(cm.actualMap))
+	i := 0
+	for k := range cm.actualMap {
+		keys[i] = k
+		i++
+	}
+	return keys
+}
+
+func (cm *ConcurrentMap) Values() []interface{} {
+	defer cm.rwLock.RUnlock()
+	cm.rwLock.RLock()
+	values := make([]interface{}, len(cm.actualMap))
+	i := 0
+	for _, v := range cm.actualMap {
+		values[i] = v
+		i++
+	}
+	return values
+}
+
+func (cm *ConcurrentMap) ComputeIfAbsent(key interface{}, supplier func() interface{}) {
+	defer cm.rwLock.Unlock()
+	cm.rwLock.Lock()
+
+	if _, exist := cm.actualMap[key]; !exist {
+		cm.actualMap[key] = supplier()
+	}
+}
+
 func (cm *ConcurrentMap) Clear() {
 	defer cm.rwLock.Unlock()
 	cm.rwLock.Lock()
@@ -155,7 +209,7 @@ func NewSetWithValues(arr ...interface{}) *Set {
 }
 
 func (s *Set) Range(f func(value interface{})) {
-	for v, _ := range s.container {
+	for v := range s.container {
 		f(v)
 	}
 }
@@ -217,39 +271,46 @@ func (s *Set) RemoveAllWithSet(set *Set) {
 	})
 }
 
-func (s *Set) ToSlice(arr ...interface{}) {
-	for v, _ := range s.container {
+func (s *Set) ToSlice() []interface{} {
+	arr := make([]interface{}, len(s.container))
+	for v := range s.container {
 		arr = append(arr, v)
 	}
+	return arr
 }
 
 func (s *Set) IsEmpty() bool {
 	return s.Size() == 0
 }
 
-type SyncSet struct {
-	container sync.Map
+type ConcurrentSet struct {
+	lock      sync.RWMutex
+	container *Set
 }
 
-func NewSyncSet() *SyncSet {
-	return &SyncSet{
-		container: sync.Map{},
+func NewSyncSet() *ConcurrentSet {
+	return &ConcurrentSet{
+		lock:      sync.RWMutex{},
+		container: NewSet(),
 	}
 }
 
-func (s *SyncSet) Range(f func(value interface{})) {
-	s.container.Range(func(key, value interface{}) bool {
-		f(key)
-		return true
-	})
+func (s *ConcurrentSet) Range(f func(value interface{})) {
+	defer s.lock.RUnlock()
+	s.lock.RLock()
+	s.container.Range(f)
 }
 
-func (s *SyncSet) Add(value interface{}) {
-	s.container.Store(value, member)
+func (s *ConcurrentSet) Add(value interface{}) {
+	defer s.lock.Unlock()
+	s.lock.Lock()
+	s.container.Add(value)
 }
 
-func (s *SyncSet) Remove(value interface{}) {
-	s.container.Delete(value)
+func (s *ConcurrentSet) Remove(value interface{}) {
+	defer s.lock.Unlock()
+	s.lock.Lock()
+	s.container.Remove(value)
 }
 
 const (
@@ -569,15 +630,15 @@ func (bTree *BinarySearchTree) SeekLevel() [][]*node {
 		return nil
 	}
 
-	ans := make([][]*node, 0, 0)
-	tmp := make([]*node, 0, 0)
-	_stack := make([]*node, 0, 0)
+	ans := make([][]*node, 0)
+	tmp := make([]*node, 0)
+	_stack := make([]*node, 0)
 	_stack = append(_stack, bTree.root)
 	nowNodeSize := len(_stack)
 	for len(_stack) != 0 {
 		if nowNodeSize == 0 {
 			ans = append(ans, tmp)
-			tmp = make([]*node, 0, 0)
+			tmp = make([]*node, 0)
 			nowNodeSize = len(_stack)
 		}
 		p := _stack[0]
@@ -756,11 +817,13 @@ func (bTree *BinarySearchTree) rangeVal(root *node, call func(n *node)) {
 	}
 }
 
+//TreeMap 后面要优化成为红黑树，或者较为简单的 AVL 树
 type TreeMap struct {
 	BinarySearchTree
 	keyCompare func(a, b interface{}) int
 }
 
+//NewTreeMap 创建一个 TreeMap
 func NewTreeMap(compare func(a, b interface{}) int) *TreeMap {
 	tMap := &TreeMap{
 		keyCompare: nil,
@@ -780,6 +843,7 @@ type mapEntry struct {
 	val interface{}
 }
 
+//Put 添加一个 key-value 键值对
 func (tMap *TreeMap) Put(key, val interface{}) {
 	entry := mapEntry{
 		key: key,

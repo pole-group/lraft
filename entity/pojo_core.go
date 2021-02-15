@@ -325,8 +325,23 @@ type LogEntry struct {
 	Learners    []PeerId
 	OldLearners []PeerId
 	Data        []byte
-	checksum    int64
+	checksum    uint64
 	HasChecksum bool
+}
+
+func ToLogEntry(log *raft.PBLogEntry) *LogEntry {
+	entry := &LogEntry{
+		LogType:     log.Type,
+		LogID:       NewLogID(log.Index, log.Term),
+		Peers:       BatchParsePeerFromBytes(log.Peers),
+		OldPeers:    BatchParsePeerFromBytes(log.OldPeers),
+		Learners:    BatchParsePeerFromBytes(log.Learners),
+		OldLearners: BatchParsePeerFromBytes(log.OldLearners),
+		Data:        log.Data,
+		checksum:    log.Checksum,
+		HasChecksum: true,
+	}
+	return entry
 }
 
 func NewLogEntry(t raft.EntryType) *LogEntry {
@@ -353,13 +368,13 @@ func (le *LogEntry) Checksum() uint64 {
 	return c
 }
 
-func (le *LogEntry) SetChecksum(checksum int64) {
+func (le *LogEntry) SetChecksum(checksum uint64) {
 	le.checksum = checksum
 	le.HasChecksum = true
 }
 
 func (le *LogEntry) IsCorrupted() bool {
-	return le.HasChecksum && le.checksum != int64(le.Checksum())
+	return le.HasChecksum && le.checksum != uint64(le.Checksum())
 }
 
 func (le *LogEntry) Encode() []byte {

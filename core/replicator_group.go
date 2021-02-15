@@ -118,7 +118,7 @@ func (rpg *ReplicatorGroup) addReplicator(peer entity.PeerId, replicatorType Rep
 	}
 
 	replicator := newReplicator(opts, rpg.raftOpt)
-	if ok, err := replicator.Start(); !ok || err != nil {
+	if ok, err := replicator.start(); !ok || err != nil {
 		utils.RaftLog.Error("fail to startJob replicator to peer=%s, replicatorType=%", peer.GetDesc(), replicatorType)
 		return false, err
 	}

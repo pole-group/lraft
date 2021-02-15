@@ -20,7 +20,6 @@ type rSocketClientRpcContext struct {
 
 func (rpc *rSocketClientRpcContext) Send(resp *ServerRequest) {
 	rpc.fSink.Next(resp)
-	return
 }
 
 type rSocketServerRpcContext struct {

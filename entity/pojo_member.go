@@ -69,6 +69,34 @@ type PeerId struct {
 	desc     string
 }
 
+func ParsePeer(s string) PeerId {
+	p := PeerId{}
+	p.Parse(s)
+	return p
+}
+
+func BatchParsePeer(s []string) []PeerId {
+	if s == nil {
+		return []PeerId{}
+	}
+	peers := make([]PeerId, len(s))
+	for i, p := range s {
+		peers[i] = ParsePeer(p)
+	}
+	return peers
+}
+
+func BatchParsePeerFromBytes(s [][]byte) []PeerId {
+	if s == nil {
+		return []PeerId{}
+	}
+	peers := make([]PeerId, len(s))
+	for i, p := range s {
+		peers[i] = ParsePeer(string(p))
+	}
+	return peers
+}
+
 var EmptyPeer = PeerId{
 	endpoint: Endpoint{
 		ip:   "-1",
