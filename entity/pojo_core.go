@@ -32,8 +32,12 @@ type State struct {
 	msg  string
 }
 
+func IsEmptyStatus(st Status) bool {
+	return "empty status" == st.GetMsg()
+}
+
 func NewEmptyStatus() Status {
-	return Status{state: &State{}}
+	return Status{state: &State{msg: "empty status"}}
 }
 
 func NewStatus(code RaftErrorCode, msg string) Status {
@@ -100,37 +104,41 @@ type LogId struct {
 	term  int64
 }
 
-func NewEmptyLogID() *LogId {
-	return &LogId{
-		index: 0,
-		term:  0,
+func NewEmptyLogID() LogId {
+	return LogId{
+		index: -1,
+		term:  -1,
 	}
 }
 
-func NewLogID(index, term int64) *LogId {
-	return &LogId{
+func IsEmptyLogID(id LogId) bool {
+	return id.index == -1 && id.term == -1
+}
+
+func NewLogID(index, term int64) LogId {
+	return LogId{
 		index: index,
 		term:  term,
 	}
 }
 
-func (l *LogId) SetIndex(index int64) {
+func (l LogId) SetIndex(index int64) {
 	l.index = index
 }
 
-func (l *LogId) SetTerm(term int64) {
+func (l LogId) SetTerm(term int64) {
 	l.term = term
 }
 
-func (l *LogId) GetIndex() int64 {
+func (l LogId) GetIndex() int64 {
 	return l.index
 }
 
-func (l *LogId) GetTerm() int64 {
+func (l LogId) GetTerm() int64 {
 	return l.term
 }
 
-func (l *LogId) Compare(other *LogId) int64 {
+func (l LogId) Compare(other LogId) int64 {
 	c := l.term - other.term
 	if c == 0 {
 		return l.index - other.index
@@ -138,12 +146,9 @@ func (l *LogId) Compare(other *LogId) int64 {
 	return c
 }
 
-func (l *LogId) IsEquals(other *LogId) bool {
+func (l LogId) IsEquals(other LogId) bool {
 	if l == other {
 		return true
-	}
-	if other == nil {
-		return false
 	}
 	return l.index == other.index && l.term == other.term
 }
@@ -319,7 +324,7 @@ func (l LeaderChangeContext) Copy() LeaderChangeContext {
 
 type LogEntry struct {
 	LogType     raft.EntryType
-	LogID       *LogId
+	LogID       LogId
 	Peers       []PeerId
 	OldPeers    []PeerId
 	Learners    []PeerId
@@ -354,6 +359,10 @@ func (le *LogEntry) HasLearners() bool {
 	l := le.Learners != nil && len(le.Learners) != 0
 	ol := le.OldLearners != nil && len(le.OldLearners) != 0
 	return l || ol
+}
+
+func (le *LogEntry) GetChecksum() uint64 {
+	return le.checksum
 }
 
 func (le *LogEntry) Checksum() uint64 {

@@ -195,3 +195,25 @@ func (rpg *ReplicatorGroup) stopTransferLeadership(peer entity.PeerId) bool {
 func (rpg *ReplicatorGroup) stopAll() {
 
 }
+
+func (rpg *ReplicatorGroup) stopReplicator(peer entity.PeerId) {
+
+}
+
+func stopReplicator(node *nodeImpl, keep, drop []entity.PeerId) {
+	for _, waitDrop := range drop {
+		if waitDrop.Equal(node.serverID) {
+			continue
+		}
+		inKeep := false
+		for _, peer := range keep {
+			if peer.Equal(waitDrop) {
+				inKeep = true
+				break
+			}
+		}
+		if !inKeep {
+			node.replicatorGroup.stopReplicator(waitDrop)
+		}
+	}
+}

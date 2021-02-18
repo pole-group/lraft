@@ -109,7 +109,7 @@ func (iti *IteratorImpl) Next() {
 		if err := recover(); err != nil {
 			iti.err = iti.GetOrCreateError()
 			iti.err.ErrType = raft.ErrorType_ErrorTypeLog
-			iti.err.Status.SetError(entity.EINVAL, err.(error).Error())
+			iti.err.Status.SetError(entity.Einval, err.(error).Error())
 		}
 	}()
 
@@ -131,7 +131,7 @@ func (iti *IteratorImpl) RunTenRestClosureWithError() {
 		done := iti.closures[i-iti.firstClosureIndex]
 		if done != nil {
 			if _, err := utils.RequireNonNil(iti.err, "error"); err != nil {
-				done.Run(entity.NewStatus(entity.EINVAL, "impossible run into here"))
+				done.Run(entity.NewStatus(entity.Einval, "impossible run into here"))
 				continue
 			}
 			done.Run(iti.err.Status)
@@ -382,14 +382,14 @@ func (fci *FSMCallerImpl) enqueueTask(at *ApplyTask) bool {
 	if err != nil {
 		fci.setError(entity.RaftError{
 			ErrType: raft.ErrorType_ErrorTypeStateMachine,
-			Status:  entity.NewStatus(entity.EINTR, err.Error()),
+			Status:  entity.NewStatus(entity.Eintr, err.Error()),
 		})
 		return false
 	}
 	if !isOk {
 		fci.setError(entity.RaftError{
 			ErrType: raft.ErrorType_ErrorTypeStateMachine,
-			Status:  entity.NewStatus(entity.EBUSY, "FSMCaller is overload."),
+			Status:  entity.NewStatus(entity.Ebusy, "FSMCaller is overload."),
 		})
 		return false
 	}
@@ -671,7 +671,7 @@ func (fci *FSMCallerImpl) doSnapshotSave(closure SaveSnapshotClosure) {
 	if confEntry == nil || confEntry.IsEmpty() {
 		utils.RaftLog.Error("Empty conf entry for lastAppliedIndex=%d", lastAppliedIndex)
 		st := entity.NewEmptyStatus()
-		st.SetError(entity.EINVAL, "Empty conf entry for lastAppliedIndex=%d", lastAppliedIndex)
+		st.SetError(entity.Einval, "Empty conf entry for lastAppliedIndex=%d", lastAppliedIndex)
 		closure.Run(st)
 		return
 	}
@@ -693,7 +693,7 @@ func (fci *FSMCallerImpl) doSnapshotSave(closure SaveSnapshotClosure) {
 
 	writer := closure.Start(&snapshotMeta)
 	if writer == nil {
-		closure.Run(entity.NewStatus(entity.EINVAL, "snapshot_storage create SnapshotWriter failed"))
+		closure.Run(entity.NewStatus(entity.Einval, "snapshot_storage create SnapshotWriter failed"))
 		return
 	}
 	fci.fsm.OnSnapshotSave(writer, closure)
@@ -706,12 +706,12 @@ func (fci *FSMCallerImpl) doSnapshotLoad(closure LoadSnapshotClosure) {
 	}
 	reader := closure.Start()
 	if reader == nil {
-		closure.Run(entity.NewStatus(entity.EINVAL, "open SnapshotReader failed"))
+		closure.Run(entity.NewStatus(entity.Einval, "open SnapshotReader failed"))
 		return
 	}
 	snapshotMeta := reader.Load()
 	if snapshotMeta == nil {
-		closure.Run(entity.NewStatus(entity.EINVAL, "SnapshotReader load SnapshotMeta failed"))
+		closure.Run(entity.NewStatus(entity.Einval, "SnapshotReader load SnapshotMeta failed"))
 		if reader.Status().GetCode() == entity.EIO {
 			fci.setError(entity.RaftError{
 				ErrType: raft.ErrorType_ErrorTypeSnapshot,
@@ -732,7 +732,7 @@ func (fci *FSMCallerImpl) doSnapshotLoad(closure LoadSnapshotClosure) {
 	//		Leader 才会主动的触发 Follower 从 Leader 同步快照文件的操作
 	if lastAppliedID.Compare(snapshotID) > 0 {
 		st := entity.NewEmptyStatus()
-		st.SetError(entity.ESTALE, "Loading a stale snapshot last_applied_index=%d last_applied_term=%d snapshot_index=%d snapshot_term=%d",
+		st.SetError(entity.EStale, "Loading a stale snapshot last_applied_index=%d last_applied_term=%d snapshot_index=%d snapshot_term=%d",
 			lastAppliedID.GetIndex(), lastAppliedID.GetTerm(), snapshotID.GetIndex(), snapshotID.GetTerm())
 		closure.Run(st)
 		return
@@ -802,7 +802,7 @@ func (fci *FSMCallerImpl) passByStatus(done Closure) bool {
 	st := fci.error.Status
 	if !st.IsOK() && done != nil {
 		_st := entity.NewEmptyStatus()
-		_st.SetError(entity.EINVAL, "FSMCaller is in bad status=%+v", st)
+		_st.SetError(entity.Einval, "FSMCaller is in bad status=%+v", st)
 		done.Run(_st)
 		return false
 	}

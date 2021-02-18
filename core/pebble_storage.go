@@ -309,7 +309,6 @@ func (pls *pebbleLogStorage) TruncatePrefix(firstIndexKept int64) bool {
 	if err == nil && saveOk {
 		pls.setFirstLogIndex(startIndex)
 	}
-
 	pls.truncateRangeInBackground(startIndex, firstIndexKept)
 	return saveOk
 }
@@ -318,7 +317,6 @@ func (pls *pebbleLogStorage) TruncatePrefix(firstIndexKept int64) bool {
 func (pls *pebbleLogStorage) TruncateSuffix(lastIndexKept int64) bool {
 	defer pls.lock.RUnlock()
 	pls.lock.RLock()
-
 	pls.truncateRangeInBackground(lastIndexKept+1, pls.GetLastLogIndex()+1)
 	return true
 }

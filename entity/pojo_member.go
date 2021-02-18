@@ -109,6 +109,25 @@ var EmptyPeer = PeerId{
 	desc:     "",
 }
 
+func RemoveTargetPeer(peers []PeerId, waitRemove PeerId) []PeerId {
+	target := peers[:0]
+	for _, peer := range peers {
+		if !waitRemove.Equal(peer) {
+			target = append(target, peer)
+		}
+	}
+	return target
+}
+
+func IsContainTargetPeer(peers []PeerId, target PeerId) bool {
+	for _, peer := range peers {
+		if peer.Equal(target) {
+			return true
+		}
+	}
+	return false
+}
+
 func NewPeerId(endpoint Endpoint, idx int64, priority ElectionPriority) *PeerId {
 	return &PeerId{
 		endpoint: endpoint,

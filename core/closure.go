@@ -46,7 +46,7 @@ func (cq *ClosureQueue) Clear() {
 	cq.firstIndex = 0
 	cq.lock.Unlock()
 
-	status := entity.NewStatus(entity.EPERM, "Leader stepped down")
+	status := entity.NewStatus(entity.EPerm, "Leader stepped down")
 
 	e := t.Front()
 	for e != nil {
@@ -192,7 +192,7 @@ func NewReadIndexClosure(f func(status entity.Status, index int64, reqCtx []byte
 
 	ticker := time.NewTicker(timeout)
 
-	polerpc.Go(context.Background(), func(ctx context.Context) {
+	polerpc.Go(context.Background(), func(arg interface{}) {
 		for {
 			select {
 			case <-ticker.C:
@@ -201,7 +201,7 @@ func NewReadIndexClosure(f func(status entity.Status, index int64, reqCtx []byte
 					return
 				}
 				rc.SetResult(InvalidLogIndex, nil)
-				rc.runUserCallback(entity.NewStatus(entity.ETIMEDOUT, "read-index request timeout"))
+				rc.runUserCallback(entity.NewStatus(entity.ETimeout, "read-index request timeout"))
 				ticker.Stop()
 			}
 		}
@@ -239,16 +239,54 @@ func (rc *ReadIndexClosure) Run(status entity.Status) {
 	rc.runUserCallback(status)
 }
 
+type OnCaughtUp struct {
+	node    *nodeImpl
+	term    int64
+	peer    entity.PeerId
+	version int64
+}
+
+func (ocu *OnCaughtUp) exec(status entity.Status) {
+	onCaughtUp(ocu.node, ocu.peer, ocu.term, ocu.version, status)
+}
+
+type ConfigurationChangeClosure struct {
+	node        *nodeImpl
+	term        int64
+	leaderStart bool
+}
+
+func (ccc *ConfigurationChangeClosure) Run(st entity.Status) {
+	if st.IsOK() {
+		ccc.node.onConfigurationChangeDone(ccc.term)
+		if ccc.leaderStart {
+			ccc.node.options.Fsm.OnLeaderStart(ccc.term)
+		}
+	} else {
+		utils.RaftLog.Error("Fail to run ConfigurationChangeDone, status: %#v", st)
+	}
+}
+
 type CatchUpClosure struct {
 	maxMargin   int64
-	future      utils.Future
+	future      polerpc.Future
 	errorWasSet bool
 	status      entity.Status
-	F           func(status entity.Status)
+	f           func(status entity.Status)
+}
+
+func newCatchUpClosure(f func(status entity.Status)) *CatchUpClosure {
+	return &CatchUpClosure{
+		maxMargin:   0,
+		future:      nil,
+		errorWasSet: false,
+		status:      entity.Status{},
+		f:           f,
+	}
 }
 
 func (cuc *CatchUpClosure) Run(status entity.Status) {
-	cuc.F(status)
+	cuc.f(status)
 }
 
 func (cuc *CatchUpClosure) GetMaxMargin() int64 {
@@ -259,28 +297,27 @@ func (cuc *CatchUpClosure) SetMaxMargin(maxMargin int64) {
 	cuc.maxMargin = maxMargin
 }
 
-func (cuc *CatchUpClosure) GetFuture() utils.Future {
+func (cuc *CatchUpClosure) GetFuture() polerpc.Future {
 	return cuc.future
 }
 
-func (cuc *CatchUpClosure) IsErrorWasSet() bool {
-	return cuc.errorWasSet
-}
-
-func (cuc *CatchUpClosure) SetErrorWasSet(errorWasSet bool) {
-	cuc.errorWasSet = errorWasSet
-}
-
 type StableClosure struct {
-	FirstLogIndex int64
-	Entries       []*entity.LogEntry
-	NEntries      int32
-	f             func(status entity.Status)
+	node           *nodeImpl
+	firstLogIndex  int64
+	firstIndexKept int64
+	lastIndexKept  int64
+	lastTermKept   int64
+	nextLogIndex   int64
+	lastLogID      entity.LogId
+	entries        []*entity.LogEntry
+	nEntries       int32
+	latch          sync.WaitGroup
+	f              func(status entity.Status)
 }
 
 func NewStableClosure(entries []*entity.LogEntry, f func(status entity.Status)) *StableClosure {
 	return &StableClosure{
-		Entries: entries,
+		entries: entries,
 		f:       f,
 	}
 }

@@ -75,7 +75,7 @@ func (sfl *SimpleFileLogStorage) GetLastLogIndex() int64 {
 func (sfl *SimpleFileLogStorage) GetEntry(index int64) *entity.LogEntry {
 	f := sfl.findTargetRaftLogFile(index)
 
-	logF, err := os.OpenFile(filepath.Join(sfl.opt.KvDir, f.Name), os.O_RDONLY, os.ModePerm)
+	 _, err := os.OpenFile(filepath.Join(sfl.opt.KvDir, f.Name), os.O_RDONLY, os.ModePerm)
 	if err != nil {
 		utils.RaftLog.Error("open raft log file : %s failed, error : %s", f.Name, err)
 		return nil

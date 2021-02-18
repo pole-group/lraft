@@ -104,6 +104,7 @@ type Replicator struct {
 	seqGenerator           int64
 	waitId                 int64
 	reader                 SnapshotReader
+	catchUpClosure         *CatchUpClosure
 	rpcInFly               *InFlight
 	inFlights              *list.List    // <*InFlight>
 	pendingResponses       *responseHeap // rpcResponse
@@ -236,7 +237,7 @@ func (r *Replicator) startHeartbeat(startMs int64) {
 	dueTime := startMs + int64(r.options.dynamicHeartBeatTimeoutMs)
 	future := polerpc.DoTimerSchedule(func() {
 		// 实际这里会触发的是 sendHeartbeat 的操作
-		r.setError(entity.ETIMEDOUT)
+		r.setError(entity.ETimeout)
 	}, time.Duration(dueTime)*time.Millisecond, func() time.Duration {
 		return time.Duration(dueTime) * time.Millisecond
 	})
@@ -588,7 +589,7 @@ func (r *Replicator) onAppendEntriesReturned(inFlight *InFlight, st entity.Statu
 	if !resp.Success {
 		if resp.Term > r.options.term {
 			node := r.options.node
-			notifyOnCaughtUp(r, entity.EPERM, true)
+			notifyOnCaughtUp(r, entity.EPerm, true)
 			r.shutdown()
 			node.increaseTermTo(resp.Term, entity.NewStatus(entity.EHigherTermResponse,
 				fmt.Sprintf("leader receives higher term appendentries_response from peer : %s",
@@ -640,7 +641,7 @@ func (r *Replicator) onAppendEntriesReturned(inFlight *InFlight, st entity.Statu
 	r.hasSucceeded = true
 	r.blockFuture = nil
 	r.nextIndex += int64(entries)
-	notifyOnCaughtUp(r, entity.SUCCESS, false)
+	notifyOnCaughtUp(r, entity.Success, false)
 	if r.timeoutNowIndex > 0 && r.timeoutNowIndex < r.nextIndex {
 		r.sendTimeoutNow(false, false)
 	}
@@ -657,8 +658,8 @@ func (r *Replicator) onHeartbeatReturn(st entity.Status, resp *raft.AppendEntrie
 	if !st.IsOK() {
 		r.state = ReplicatorProbe
 		notifyReplicatorStatusListener(r, ReplicatorErrorEvent, st)
-		r.consecutiveErrorTimes ++
-		if r.consecutiveErrorTimes % 10 == 0 {
+		r.consecutiveErrorTimes++
+		if r.consecutiveErrorTimes%10 == 0 {
 			utils.RaftLog.Warn("fail to issue RPC to %s, consecutiveErrorTimes=%d, error=%s",
 				r.options.peerId.GetDesc(), r.consecutiveErrorTimes, st)
 		}
@@ -669,7 +670,7 @@ func (r *Replicator) onHeartbeatReturn(st entity.Status, resp *raft.AppendEntrie
 	r.consecutiveErrorTimes = 0
 	if resp.Term > r.options.term {
 		node := r.options.node
-		notifyOnCaughtUp(r, entity.EPERM, true)
+		notifyOnCaughtUp(r, entity.EPerm, true)
 		r.shutdown()
 		node.increaseTermTo(resp.Term, entity.NewStatus(entity.EHigherTermResponse,
 			fmt.Sprintf("leader receives higher term heartbeat_response from peer : %s", r.options.peerId.GetDesc())))
@@ -720,7 +721,7 @@ func (r *Replicator) onTimeoutNowReturned(st entity.Status, req *raft.TimeoutNow
 
 	if resp.Term > r.options.term {
 		node := r.options.node
-		notifyOnCaughtUp(r, entity.EPERM, true)
+		notifyOnCaughtUp(r, entity.EPerm, true)
 		r.shutdown()
 		node.increaseTermTo(resp.Term, entity.NewStatus(entity.EHigherTermResponse,
 			fmt.Sprintf("leader receives higher term timeout_now_response from peer : %s", r.options.peerId.GetDesc())))
@@ -755,10 +756,12 @@ func (r *Replicator) getAndIncrementRequiredNextSeq() int64 {
 
 type replicatorWait struct{}
 
+//OnNewLog
 func (rw *replicatorWait) OnNewLog(arg *Replicator, errCode entity.RaftErrorCode) {
 	arg.continueSending(errCode)
 }
 
+//waitMoreEntries
 func (r *Replicator) waitMoreEntries(nextWaitIndex int64) {
 	utils.RaftLog.Debug("node %s waits more entries", r.options.node.nodeID.GetDesc())
 	defer r.lock.Unlock()
@@ -784,6 +787,7 @@ func (r *Replicator) continueSending(errCode entity.RaftErrorCode) {
 	}
 }
 
+//prepareEntry
 func (r *Replicator) prepareEntry(body []byte, nextSendingIndex int64, emb *raft.EntryMeta) (bool, error) {
 	if len(body) > int(r.raftOptions.MaxBodySize) {
 		return false, nil
@@ -814,6 +818,7 @@ func (r *Replicator) prepareEntry(body []byte, nextSendingIndex int64, emb *raft
 	return false, nil
 }
 
+//fillMetaPeers
 func (r *Replicator) fillMetaPeers(emb *raft.EntryMeta, entry *entity.LogEntry) {
 	for _, peer := range entry.Peers {
 		emb.Peers = append(emb.Peers, peer.GetDesc())
@@ -835,6 +840,7 @@ func (r *Replicator) fillMetaPeers(emb *raft.EntryMeta, entry *entity.LogEntry) 
 	}
 }
 
+//fillCommonFields
 func (r *Replicator) fillCommonFields(req *raft.AppendEntriesRequest, prevLogIndex int64, isHeartbeat bool) bool {
 	prevLogTerm := r.options.logMgn.GetTerm(prevLogIndex)
 	if prevLogTerm == 0 && prevLogIndex != 0 {
@@ -864,6 +870,7 @@ func (r *Replicator) fillCommonFields(req *raft.AppendEntriesRequest, prevLogInd
 	return true
 }
 
+//shutdown
 func (r *Replicator) shutdown() {
 	r.destroy = true
 	r.futures.ForEach(func(index int, v interface{}) {
@@ -871,10 +878,72 @@ func (r *Replicator) shutdown() {
 	})
 }
 
-func notifyOnCaughtUp(r *Replicator, errCode entity.RaftErrorCode, beforeDestroy bool) {
-
+//waitForCaughtUp 等待一段时间，看看 Replicator 是否可以追上
+func waitForCaughtUp(r *Replicator, maxMargin, dueTime int64, done *CatchUpClosure) {
+	r.lock.Lock()
+	if r.catchUpClosure != nil {
+		st := entity.NewStatus(entity.Einval, "duplicated call")
+		hold := r.catchUpClosure
+		polerpc.Go(st, func(arg interface{}) {
+			st := arg.(entity.Status)
+			hold.Run(st)
+		})
+		return
+	}
+	// 设置最大可容忍的待追平的日志位点的差距
+	r.catchUpClosure.maxMargin = maxMargin
+	if dueTime > 0 {
+		done.future = polerpc.DelaySchedule(func() {
+			defer r.lock.Unlock()
+			notifyOnCaughtUp(r, entity.ETimeout, false)
+		}, time.Duration(dueTime))
+	}
 }
 
+//notifyOnCaughtUp
+func notifyOnCaughtUp(r *Replicator, errCode entity.RaftErrorCode, beforeDestroy bool) {
+	if r.catchUpClosure == nil {
+		return
+	}
+	if errCode != entity.ETimeout {
+		// 如果 Replicator 目前已经复制到的值 + 允许容忍的最大未同步的 Log 数量，仍然小于目前 LogManager 所存储的最大的 LogIndex，则不允许触发notify
+		if r.nextIndex-1+r.catchUpClosure.maxMargin < r.options.node.logManager.GetLastLogIndex() {
+			return
+		}
+		if r.catchUpClosure.errorWasSet {
+			return
+		}
+		r.catchUpClosure.errorWasSet = true
+		if errCode != entity.Success {
+			r.catchUpClosure.status.SetCode(errCode)
+		}
+		if r.catchUpClosure.future != nil {
+			if !beforeDestroy {
+				r.catchUpClosure.future.Cancel()
+				return
+			}
+		}
+	} else {
+		if r.catchUpClosure.errorWasSet {
+			r.catchUpClosure.status.SetCode(errCode)
+		}
+	}
+	hold := r.catchUpClosure
+	r.catchUpClosure = nil
+
+	param := make(map[string]interface{})
+	param["status"] = hold.status
+	param["closure"] = hold
+
+	polerpc.Go(hold.status, func(arg interface{}) {
+		p := arg.(map[string]interface{})
+		st := p["status"].(entity.Status)
+		closure := p["closure"].(*CatchUpClosure)
+		closure.Run(st)
+	})
+}
+
+//notifyReplicatorStatusListener
 func notifyReplicatorStatusListener(r *Replicator, event ReplicatorEvent, st entity.Status) {
 	node := r.options.node
 	peer := r.options.peerId
@@ -946,7 +1015,7 @@ func onBlockTimeout(r *Replicator) {
 //onError 根据异常码 errCode 处理不同的逻辑
 func onError(r *Replicator, errCode entity.RaftErrorCode) {
 	switch errCode {
-	case entity.ETIMEDOUT:
+	case entity.ETimeout:
 		// 触发心跳发送的逻辑
 		r.lock.Unlock()
 		utils.DefaultScheduler.Submit(func() {
@@ -990,4 +1059,8 @@ func onError(r *Replicator, errCode entity.RaftErrorCode) {
 		r.lock.Unlock()
 		panic(fmt.Errorf("unknown error code for replicator: %d", errCode))
 	}
+}
+
+func onCaughtUp(node *nodeImpl, peer entity.PeerId, term, version int64, st entity.Status) {
+
 }

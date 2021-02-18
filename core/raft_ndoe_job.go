@@ -163,7 +163,7 @@ func (v *VoteJob) handleVoteTimeout() {
 	}
 
 	if v.node.raftOptions.StepDownWhenVoteTimeout {
-		stepDown(v.node, v.node.currTerm, false, entity.NewStatus(entity.ETIMEDOUT,
+		stepDown(v.node, v.node.currTerm, false, entity.NewStatus(entity.ETimeout,
 			"vote timeout: fail to get quorum vote-granted"))
 		doPreVote(v.node)
 	} else {

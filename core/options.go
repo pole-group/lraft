@@ -87,10 +87,12 @@ const (
 )
 
 type RaftOptions struct {
+	EnableLogEntryChecksum    bool
 	StepDownWhenVoteTimeout   bool
 	ReadOnlyOpt               ReadOnlyOption
 	MaxReplicatorInflightMsgs int64
 	MaxEntriesSize            int32
+	MaxAppendBufferEntries    int32
 	MaxBodySize               int32
 }
 

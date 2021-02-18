@@ -18,7 +18,7 @@ import (
 
 	"github.com/pole-group/lraft/entity"
 
-	proto2 "github.com/pole-group/lraft/proto"
+	raft "github.com/pole-group/lraft/proto"
 	"github.com/pole-group/lraft/rpc"
 	"github.com/pole-group/lraft/utils"
 )
@@ -69,7 +69,7 @@ type ConfigurationCtx struct {
 	oldPeers    []entity.PeerId
 	addingPeers []entity.PeerId
 
-	learners    []entity.PeerId
+	newLearners []entity.PeerId
 	oldLearners []entity.PeerId
 	done        Closure
 }
@@ -86,16 +86,136 @@ func (cc *ConfigurationCtx) Start(conf, oldConf *entity.Configuration, done Clos
 
 }
 
+//addNewPeers 添加新的成员
+func (cc *ConfigurationCtx) addNewPeers(adding *entity.Configuration) {
+	node := cc.node
+	utils.RaftLog.Info("adding peers : %#v", adding)
+	for _, peer := range adding.ListPeers() {
+		nowT := utils.GetCurrentTimeMs()
+		if ok, err := node.replicatorGroup.addReplicator(peer, ReplicatorFollower, true); !ok || err != nil {
+			utils.RaftLog.Error("node %s start the replicator failed, peer=%s.", node.nodeID.GetDesc(), peer.GetDesc())
+			cc.onCaughtUp(cc.version, peer, false)
+			return
+		}
+
+		c := &OnCaughtUp{
+			node:    node,
+			term:    node.currTerm,
+			peer:    peer,
+			version: cc.version,
+		}
+
+		caughtUp := newCatchUpClosure(c.exec)
+		if replicator := node.replicatorGroup.getReplicator(peer); replicator != nil {
+			waitForCaughtUp(replicator, int64(node.options.CatchupMargin), nowT+node.options.ElectionTimeoutMs, caughtUp)
+		} else {
+			utils.RaftLog.Error("node %s waitCaughtUp, peer=%s.", node.nodeID.GetDesc(), peer.GetDesc())
+			cc.onCaughtUp(cc.version, peer, false)
+			return
+		}
+	}
+}
+
+//onCaughtUp 当日志追上的时候回调钩子
+func (cc *ConfigurationCtx) onCaughtUp(version int64, peer entity.PeerId, success bool) {
+	if version != cc.version {
+		return
+	}
+	if err := utils.RequireTrue(cc.stage == StageCatchingUp, "Stage is not in STAGE_CATCHING_UP"); err != nil {
+		return
+	}
+	if success {
+		cc.addingPeers = entity.RemoveTargetPeer(cc.addingPeers, peer)
+		if len(cc.addingPeers) == 0 {
+			cc.nextStage()
+		}
+		return
+	}
+	cc.Reset(entity.NewEmptyStatus())
+}
+
+func (cc *ConfigurationCtx) nextStage() {
+	if err := utils.RequireTrue(cc.IsBusy(), "not in busy stage"); err != nil {
+		utils.RaftLog.Error("do next stage failed, error : %s", err)
+		return
+	}
+	switch cc.stage {
+	case StageCatchingUp:
+		if cc.nChanges > 0 {
+			cc.stage = StageJoint
+			if err := cc.node.unsafeApplyConfiguration(entity.NewConfiguration(cc.newPeers, cc.newLearners),
+				entity.NewConfiguration(cc.oldPeers, nil), false); err != nil {
+
+			}
+			return
+		}
+	case StageJoint:
+		cc.stage = StageStable
+		if err := cc.node.unsafeApplyConfiguration(entity.NewConfiguration(cc.newPeers, cc.newLearners), nil,
+			false); err != nil {
+
+		}
+		return
+	case StageStable:
+		shouldStepDown := entity.IsContainTargetPeer(cc.newPeers, cc.node.serverID)
+		cc.Reset(entity.NewEmptyStatus())
+		if shouldStepDown {
+			cc.node.stepDown(cc.node.currTerm, true, entity.NewStatus(entity.ELeaderMoved,
+				fmt.Sprintf("this node : %s was removed", cc.node.nodeID.GetDesc())))
+		}
+	case StageNone:
+		panic(fmt.Errorf("can't run into here"))
+	}
+}
+
 func (cc *ConfigurationCtx) IsBusy() bool {
 	return cc.stage != StageNone
 }
 
 func (cc *ConfigurationCtx) flush(newConf, oldConf *entity.Configuration) {
-
+	newPeers := newConf.ListPeers()
+	newLearners := newConf.ListLearners()
+	if oldConf == nil || oldConf.IsEmpty() {
+		cc.stage = StageStable
+		cc.oldPeers = newPeers
+		cc.oldLearners = newLearners
+	} else {
+		cc.stage = StageJoint
+		cc.oldPeers = oldConf.ListPeers()
+		cc.oldLearners = oldConf.ListLearners()
+	}
+	cc.node.unsafeApplyConfiguration(newConf, oldConf, true)
 }
 
-func (cc *ConfigurationCtx) Reset() {
+func (cc *ConfigurationCtx) Reset(st entity.Status) {
+	if !entity.IsEmptyStatus(st) && st.IsOK() {
+		stopReplicator(cc.node, cc.newPeers, cc.oldPeers)
+		stopReplicator(cc.node, cc.newLearners, cc.oldLearners)
+	} else {
+		stopReplicator(cc.node, cc.oldPeers, cc.newPeers)
+		stopReplicator(cc.node, cc.oldPeers, cc.newPeers)
+	}
+	cc.addingPeers = make([]entity.PeerId, 0)
+	cc.newPeers = make([]entity.PeerId, 0)
+	cc.oldPeers = make([]entity.PeerId, 0)
 
+	cc.newLearners = make([]entity.PeerId, 0)
+	cc.oldLearners = make([]entity.PeerId, 0)
+
+	cc.version++
+	cc.stage = StageNone
+	cc.nChanges = 0
+	if cc.done != nil {
+		if entity.IsEmptyStatus(st) {
+			st = entity.NewStatus(entity.EPerm, "Leader stepped down.")
+		}
+
+		hold := cc.done
+		polerpc.Go(st, func(arg interface{}) {
+			hold.Run(arg.(entity.Status))
+		})
+		cc.done = nil
+	}
 }
 
 type Node interface {
@@ -210,6 +330,7 @@ type nodeImpl struct {
 	firstLogIndex            int64
 	nEntries                 int32
 	lastLeaderTimestamp      int64
+	version                  int64
 	raftNodeJobMgn           *RaftNodeJobManager
 	fsmCaller                FSMCaller
 	targetPriority           int32
@@ -434,7 +555,7 @@ func (node *nodeImpl) TransferLeadershipTo(peer entity.PeerId) entity.Status {
 	}
 
 	if !node.conf.ContainPeer(peer) {
-		return entity.NewStatus(entity.EINVAL, fmt.Sprintf("peer %s not in current configuration", peer.GetDesc()))
+		return entity.NewStatus(entity.Einval, fmt.Sprintf("peer %s not in current configuration", peer.GetDesc()))
 	}
 
 	defer node.lock.Unlock()
@@ -443,19 +564,19 @@ func (node *nodeImpl) TransferLeadershipTo(peer entity.PeerId) entity.Status {
 	if node.state != StateLeader {
 		utils.RaftLog.Warn("node %s can't transfer leadership to peer %s as it is in state %s.",
 			node.nodeID.GetDesc(), peer.GetDesc(), node.state.GetName())
-		return entity.NewStatus(utils.IF(node.state == StateTransferring, entity.EBUSY,
-			entity.EPERM).(entity.RaftErrorCode), "not a leader")
+		return entity.NewStatus(utils.IF(node.state == StateTransferring, entity.Ebusy,
+			entity.EPerm).(entity.RaftErrorCode), "not a leader")
 	}
 	if node.confCtx.IsBusy() {
 		utils.RaftLog.Warn("Node %s refused to transfer leadership to peer %s when the leader is changing the"+
 			" configuration.", node.nodeID.GetDesc(), peer.GetDesc())
-		return entity.NewStatus(entity.EBUSY, "changing the configuration")
+		return entity.NewStatus(entity.Ebusy, "changing the configuration")
 	}
 
 	lastLogIndex := node.logManager.GetLastLogIndex()
 	if ok, err := node.replicatorGroup.transferLeadershipTo(peer, lastLogIndex); !ok || err != nil {
 		utils.RaftLog.Warn("no such peer : %s", peer.GetDesc())
-		return entity.NewStatus(entity.EINVAL, "no such peer "+peer.GetDesc())
+		return entity.NewStatus(entity.Einval, "no such peer "+peer.GetDesc())
 	}
 
 	node.state = StateTransferring
@@ -515,6 +636,54 @@ func (node *nodeImpl) onError(err entity.RaftError) {
 	if node.state <= StateError {
 		node.state = StateError
 	}
+}
+
+func (node *nodeImpl) unsafeApplyConfiguration(newConf, oldConf *entity.Configuration, leaderStart bool) error {
+	if err := utils.RequireTrue(node.confCtx.IsBusy(), "configuration ctx is busy"); err != nil {
+		return err
+	}
+	entry := entity.NewLogEntry(raft.EntryType_EntryTypeConfiguration)
+	entry.LogID = entity.NewLogID(0, node.currTerm)
+	entry.Peers = newConf.ListPeers()
+	entry.Learners = newConf.ListLearners()
+	if oldConf != nil && !oldConf.IsEmpty() {
+		entry.OldPeers = oldConf.ListPeers()
+		entry.OldLearners = oldConf.ListLearners()
+	}
+	configurationDone := &ConfigurationChangeClosure{
+		node:        node,
+		term:        node.currTerm,
+		leaderStart: leaderStart,
+	}
+	if !node.ballotBox.AppendPendingTask(newConf, oldConf, configurationDone) {
+		polerpc.Go(entity.NewStatus(entity.EInternal, "Fail to append task."), func(arg interface{}) {
+			st := arg.(entity.Status)
+			configurationDone.Run(st)
+		})
+		return nil
+	}
+
+	entries := []*entity.LogEntry{entry}
+
+	closure := &StableClosure{
+		node:          node,
+		firstLogIndex: 0,
+		entries:       entries,
+		nEntries:      int32(len(entries)),
+	}
+
+	closure.f = func(status entity.Status) {
+		node := closure.node
+		if status.IsOK() {
+			node.ballotBox.CommitAt(node.firstLogIndex, node.firstLogIndex+int64(node.nEntries)-1, node.serverID)
+		} else {
+			utils.RaftLog.Error("Node %s append [%d, %d] failed, status=%#v.", node.nodeID.GetDesc(),
+				node.firstLogIndex, node.firstLogIndex+int64(node.nEntries)-1, status)
+		}
+	}
+
+	node.logManager.AppendEntries(entries, closure)
+	return nil
 }
 
 //getAlivePeers 获取 Leader 认为存活的节点数据，此方法只能由 Leader 节点进行调用
@@ -624,8 +793,19 @@ func (node *nodeImpl) handleTransferTimeout(term int64, peer entity.PeerId) {
 	}
 }
 
+func (node *nodeImpl) onConfigurationChangeDone(term int64) {
+	defer node.lock.Unlock()
+	node.lock.Lock()
+	if term != node.currTerm || node.state > StateTransferring {
+		utils.RaftLog.Warn("node %s process onConfigurationChangeDone at term %d while state=%s, currTerm=%d.",
+			node.nodeID.GetDesc(), term, node.state.GetName(), node.currTerm)
+		return
+	}
+	node.confCtx.nextStage()
+}
+
 //stepDown 节点降级
-func (node *nodeImpl) stepDown(term int64, wakeupCandidate bool) {
+func (node *nodeImpl) stepDown(term int64, wakeupCandidate bool, st entity.Status) {
 	utils.RaftLog.Warn("node %s stepDown, term=%s, newTerm=%s, wakeupCandidate=%s.", node.nodeID.GetDesc(),
 		node.currTerm, term, wakeupCandidate)
 	if !IsNodeActive(node.state) {
@@ -633,6 +813,12 @@ func (node *nodeImpl) stepDown(term int64, wakeupCandidate bool) {
 	}
 	if node.state == StateCandidate {
 		node.raftNodeJobMgn.stopJob(JobForVote)
+	} else if node.state < StateTransferring {
+		node.raftNodeJobMgn.stopJob(JobForStepDown)
+		node.ballotBox.ClearPendingTasks()
+		if node.state == StateLeader {
+			node.onLeaderStop(st)
+		}
 	}
 }
 
@@ -684,21 +870,6 @@ type stopTransferArg struct {
 	peer entity.PeerId
 }
 
-type LeaderStableClosure struct {
-	StableClosure
-	node *nodeImpl
-}
-
-func (lsc *LeaderStableClosure) Run(status entity.Status) {
-	node := lsc.node
-	if status.IsOK() {
-		node.ballotBox.CommitAt(node.firstLogIndex, node.firstLogIndex+int64(node.nEntries)-1, node.serverID)
-	} else {
-		utils.RaftLog.Error("Node %s append [%d, %d] failed, status=%#v.", node.nodeID.GetDesc(),
-			node.firstLogIndex, node.firstLogIndex+int64(node.nEntries)-1, status)
-	}
-}
-
 type raftRpcHandler struct {
 	node *nodeImpl
 }
@@ -719,17 +890,17 @@ func (rrh *raftRpcHandler) handlePreVoteRequest() func(cxt context.Context,
 		}()
 		node.lock.Lock()
 
-		preVoteReq := &proto2.RequestVoteRequest{}
+		preVoteReq := &raft.RequestVoteRequest{}
 		if err := ptypes.UnmarshalAny(rpcCtx.GetReq().Body, preVoteReq); err != nil {
 			panic(err)
 		}
 
 		if !IsNodeActive(node.state) {
 			utils.RaftLog.Warn("Node %s is not in active state, currTerm=%d.", node.nodeID.GetDesc(), node.currTerm)
-			voteResp := &proto2.RequestVoteResponse{
+			voteResp := &raft.RequestVoteResponse{
 				Term:    0,
 				Granted: false,
-				ErrorResponse: entity.NewErrorResponse(entity.EINVAL, "Node %s is not in active state, state %s.",
+				ErrorResponse: entity.NewErrorResponse(entity.Einval, "Node %s is not in active state, state %s.",
 					node.nodeID.GetDesc(), node.state.GetName()),
 			}
 			resp, err := rrh.convertToGrpcResp(voteResp)
@@ -744,10 +915,10 @@ func (rrh *raftRpcHandler) handlePreVoteRequest() func(cxt context.Context,
 		if !candidateId.Parse(preVoteReq.ServerID) {
 			utils.RaftLog.Warn("Node %s received PreVoteRequest from %s serverId bad format.",
 				node.nodeID.GetDesc(), preVoteReq.ServerID)
-			voteResp := &proto2.RequestVoteResponse{
+			voteResp := &raft.RequestVoteResponse{
 				Term:          0,
 				Granted:       false,
-				ErrorResponse: entity.NewErrorResponse(entity.EINVAL, "Parse candidateId failed: %s.", preVoteReq.ServerID),
+				ErrorResponse: entity.NewErrorResponse(entity.Einval, "Parse candidateId failed: %s.", preVoteReq.ServerID),
 			}
 			resp, err := rrh.convertToGrpcResp(voteResp)
 			if err != nil {
@@ -783,7 +954,7 @@ func (rrh *raftRpcHandler) handlePreVoteRequest() func(cxt context.Context,
 				break
 			}
 		}
-		preVoteResp := &proto2.RequestVoteResponse{
+		preVoteResp := &raft.RequestVoteResponse{
 			Term:    node.currTerm,
 			Granted: granted,
 		}

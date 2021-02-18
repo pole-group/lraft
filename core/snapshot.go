@@ -64,6 +64,7 @@ type SnapshotCopier interface {
 }
 
 type LastLogIndexListener interface {
+	//OnLastLogIndexChanged 当最新的LogIndex发生变化时的监听，这里不能panic error，所有的 error 必须自行 defer recover 处理
 	OnLastLogIndexChanged(lastLogIndex int64)
 }
 

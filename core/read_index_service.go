@@ -76,7 +76,7 @@ func (rop *ReadOnlyOperator) addRequest(reqCtx []byte, done *ReadIndexClosure) {
 		}
 		time.Sleep(time.Duration(1) * time.Millisecond)
 	}
-	done.Run(entity.NewStatus(entity.EBUSY, "node is busy, hash too many read-only request"))
+	done.Run(entity.NewStatus(entity.Ebusy, "node is busy, hash too many read-only request"))
 }
 
 //OnApplied 监听当前状态机已经将哪一些 core.LogEntry 给 apply 成功了, 这里传入了当前最新的, appliedLogIndex
@@ -176,9 +176,9 @@ func (rop *ReadOnlyOperator) handleReadIndexRequest(req *raft.ReadIndexRequest, 
 	case StateFollower:
 		rop.readFollower(req, done)
 	case StateTransferring:
-		done.Run(entity.NewStatus(entity.EBUSY, "is transferring leadership"))
+		done.Run(entity.NewStatus(entity.Ebusy, "is transferring leadership"))
 	default:
-		done.Run(entity.NewStatus(entity.EPERM, fmt.Sprintf("invalid state for read-index : %s.", rop.node.state.GetName())))
+		done.Run(entity.NewStatus(entity.EPerm, fmt.Sprintf("invalid state for read-index : %s.", rop.node.state.GetName())))
 	}
 }
 
@@ -200,7 +200,7 @@ func (rop *ReadOnlyOperator) readLeader(req *raft.ReadIndexRequest, done *ReadIn
 
 	lastCommittedIndex := n.ballotBox.lastCommittedIndex
 	if logMgn.GetTerm(lastCommittedIndex) != n.currTerm {
-		done.Run(entity.NewStatus(entity.EAGAIN,
+		done.Run(entity.NewStatus(entity.Eagain,
 			fmt.Sprintf("ReadIndex request rejected because leader has not committed any log entry at its term, "+
 				"logIndex=%d, currTerm=%d.", lastCommittedIndex, n.currTerm)))
 		return
@@ -211,7 +211,7 @@ func (rop *ReadOnlyOperator) readLeader(req *raft.ReadIndexRequest, done *ReadIn
 		peer := entity.PeerId{}
 		peer.Parse(req.PeerID)
 		if !n.conf.ContainPeer(peer) && !n.conf.ContainLearner(peer) {
-			done.Run(entity.NewStatus(entity.EPERM, fmt.Sprintf("Peer %s is not in current configuration: %#v.",
+			done.Run(entity.NewStatus(entity.EPerm, fmt.Sprintf("Peer %s is not in current configuration: %#v.",
 				req.PeerID, n.conf)))
 			return
 		}
@@ -253,7 +253,7 @@ func (rop *ReadOnlyOperator) readLeader(req *raft.ReadIndexRequest, done *ReadIn
 func (rop *ReadOnlyOperator) readFollower(req *raft.ReadIndexRequest, done *ReadIndexResponseClosure) {
 	n := rop.node
 	if n.leaderID.IsEmpty() {
-		done.Run(entity.NewStatus(entity.EPERM, fmt.Sprintf("no leader ad term : %d", n.currTerm)))
+		done.Run(entity.NewStatus(entity.EPerm, fmt.Sprintf("no leader ad term : %d", n.currTerm)))
 		return
 	}
 	req.PeerID = n.leaderID.GetDesc()
@@ -354,7 +354,7 @@ func (rrc *ReadIndexResponseClosure) Run(status entity.Status) {
 	}
 	resp := rrc.Resp.(*raft.ReadIndexResponse)
 	if !resp.Success {
-		rrc.notifyFail(entity.NewStatus(entity.UNKNOWN, "Fail to run ReadIndex task, maybe the leader stepped down."))
+		rrc.notifyFail(entity.NewStatus(entity.Unknown, "Fail to run ReadIndex task, maybe the leader stepped down."))
 		return
 	}
 	readIndexStatus := ReadIndexStatus{

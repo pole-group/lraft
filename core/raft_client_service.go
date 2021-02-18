@@ -92,8 +92,8 @@ func invokeWithClosure(endpoint entity.Endpoint, rpcClient *rpc.RaftClient, path
 		done.Run(entity.StatusOK())
 		return nil
 	}).DoOnCancel(func() {
-		done.Run(entity.NewStatus(entity.ECANCELED, "RPC request was canceled by future."))
+		done.Run(entity.NewStatus(entity.ECanceled, "RPC request was canceled by future."))
 	}).DoOnError(func(e error) {
-		done.Run(entity.NewStatus(entity.UNKNOWN, e.Error()))
+		done.Run(entity.NewStatus(entity.Unknown, e.Error()))
 	})
 }
