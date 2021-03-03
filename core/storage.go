@@ -7,11 +7,15 @@ package core
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
 	"math"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	polerpc "github.com/pole-group/pole-rpc"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/pole-group/lraft/entity"
 	raft "github.com/pole-group/lraft/proto"
@@ -19,8 +23,9 @@ import (
 )
 
 const (
-	ConfPreFix          string = "conf_"
-	AppendLogRetryTimes        = 50
+	ConfPreFix           string = "conf_"
+	AppendLogRetryTimes         = 50
+	StablePBMetaFileName        = "stable_pb_meta"
 )
 
 var (
@@ -36,20 +41,110 @@ type RaftMetaStorage struct {
 	isInit   bool
 }
 
-type RaftMetaInfo struct {
+type RaftMetaStorageOptions func(opt *RaftMetaStorageOption)
+
+type RaftMetaStorageOption struct {
+	Path    string
+	RaftOpt RaftOptions
+	Node    *nodeImpl
+}
+
+func newRaftMetaInfo(options ...RaftMetaStorageOptions) (*RaftMetaStorage, error) {
+	opt := new(RaftMetaStorageOption)
+
+	for _, option := range options {
+		option(opt)
+	}
+
+	raftMetaStorage := &RaftMetaStorage{
+		node:     opt.Node,
+		term:     0,
+		path:     opt.Path,
+		voteFor:  entity.PeerId{},
+		raftOpts: opt.RaftOpt,
+		isInit:   true,
+	}
+
+	if err := os.Mkdir(opt.Path, os.ModePerm); err != nil {
+		return nil, err
+	}
+	if err := raftMetaStorage.load(); err != nil {
+		return nil, err
+	}
+	return raftMetaStorage, nil
+}
+
+func (rms *RaftMetaStorage) load() error {
+	f, err := os.OpenFile(filepath.Join(rms.path, StablePBMetaFileName),
+		os.O_CREATE&os.O_RDONLY,
+		os.ModePerm)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	// 文件不存在直接退出
+	if os.IsNotExist(err) {
+		return nil
+	}
+
+	content, err := ioutil.ReadAll(f)
+	if err != nil {
+		return err
+	}
+	if content != nil && len(content) != 0 {
+		metaFile := new(raft.StablePBMeta)
+		if err := proto.Unmarshal(content, metaFile); err != nil {
+			return err
+		}
+		rms.voteFor.Parse(metaFile.VotedFor)
+		rms.term = metaFile.Term
+	}
+	return nil
 }
 
 // setTermAndVotedFor
 func (rms *RaftMetaStorage) setTermAndVotedFor(term int64, peer entity.PeerId) {
-
+	rms.voteFor = peer
+	rms.term = term
 }
 
 func (rms *RaftMetaStorage) reportIOError() {
-
+	rms.node.onError(entity.RaftError{
+		ErrType: raft.ErrorType_ErrorTypeMeta,
+		Status: entity.NewStatus(entity.EIO, fmt.Sprintf("failed to save raft meta, path=%s",
+			rms.path)),
+	})
 }
 
-func (rms *RaftMetaStorage) save() {
+func (rms *RaftMetaStorage) save() bool {
+	metaFile := new(raft.StablePBMeta)
+	metaFile.Term = rms.term
+	metaFile.VotedFor = rms.voteFor.GetDesc()
+	content, err := proto.Marshal(metaFile)
+	if err != nil {
+		utils.RaftLog.Error("marshal StablePBMeta to []byte failed : %s",
+			err.Error())
+		return false
+	}
+	f, err := os.OpenFile(filepath.Join(rms.path, StablePBMetaFileName),
+		os.O_CREATE&os.O_WRONLY&os.O_TRUNC,
+		os.ModePerm)
+	if err != nil {
+		utils.RaftLog.Error("open or create StablePBMeta file failed : %s",
+			err.Error())
+		rms.reportIOError()
+		return false
+	}
+	n, err := f.Write(content)
+	if err != nil {
+		rms.reportIOError()
+		utils.RaftLog.Error("sync StablePBMeta info to file failed : %s", err.Error())
+		return false
+	}
+	return len(content) == n
+}
 
+func (rms *RaftMetaStorage) shutdown() {
+	rms.save()
 }
 
 type LogManagerOptions func(opt *LogManagerOption)
@@ -59,16 +154,16 @@ type LogManagerOption struct {
 }
 
 type LogManager interface {
+	utils.LifeCycle
+	//AddLastLogIndexListener
 	AddLastLogIndexListener(listener LastLogIndexListener)
-
+	//RemoveLogIndexListener
 	RemoveLogIndexListener(listener LastLogIndexListener)
-
-	Join()
-
+	//AppendEntries
 	AppendEntries(entries []*entity.LogEntry, done *StableClosure) error
-
+	//SetSnapshot
 	SetSnapshot(meta *raft.SnapshotMeta)
-
+	//ClearBufferedLogs
 	ClearBufferedLogs()
 
 	GetEntry(index int64) *entity.LogEntry
@@ -154,10 +249,10 @@ func newLogManager(options ...LogManagerOptions) (LogManager, error) {
 	}
 
 	mgn := &logManagerImpl{}
-	return mgn, mgn.init()
+	return mgn, mgn.Init(opt)
 }
 
-func (lMgn *logManagerImpl) init() error {
+func (lMgn *logManagerImpl) Init(arg interface{}) error {
 	maxQueueSize := int64(math.Max(float64(lMgn.opt.MaxEventQueueSize), float64(16384)))
 	if err := utils.RegisterSubscriber(lMgn); err != nil {
 		return err
@@ -176,8 +271,24 @@ func (lMgn *logManagerImpl) RemoveLogIndexListener(listener LastLogIndexListener
 	lMgn.lastLogIndexListeners.Remove(listener)
 }
 
-func (lMgn *logManagerImpl) Join() {
+func (lMgn *logManagerImpl) Shutdown() {
+	preJob := func() {
+		doUnlock := true
+		defer func() {
+			if doUnlock {
+				lMgn.lock.Unlock()
+			}
+		}()
+		doUnlock = false
+		lMgn.wakeupAllWaiter(&lMgn.lock)
+	}
+	preJob()
 
+	lMgn.shutDownLatch = sync.WaitGroup{}
+	lMgn.shutDownLatch.Add(1)
+	_ = utils.PublishEvent(&StableClosureEvent{
+		eType: LMgnEventForShutdown,
+	})
 }
 
 //AppendEntries 追加日志条目
@@ -385,7 +496,7 @@ func (lMgn *logManagerImpl) SetSnapshot(meta *raft.SnapshotMeta) {
 	} else {
 		// 任期不相等
 		if !lMgn.reset(meta.LastIncludedIndex + 1) {
-			utils.RaftLog.Warn("Reset log manager failed, nextLogIndex=%d.", meta.LastIncludedIndex + 1)
+			utils.RaftLog.Warn("Reset log manager failed, nextLogIndex=%d.", meta.LastIncludedIndex+1)
 		}
 	}
 }

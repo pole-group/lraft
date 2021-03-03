@@ -6,11 +6,14 @@ package core
 
 import (
 	"io"
+	"math"
+	"sync"
 
 	"github.com/golang/protobuf/proto"
 
 	"github.com/pole-group/lraft/entity"
 	raft "github.com/pole-group/lraft/proto"
+	"github.com/pole-group/lraft/utils"
 )
 
 const (
@@ -21,6 +24,56 @@ const (
 
 type SnapshotThrottle interface {
 	ThrottledByThroughput(bytes int64) int64
+}
+
+type ThroughputSnapshotThrottle struct {
+	throttleThroughputBytes   int64
+	checkCycleSecs            int64
+	lastThroughputCheckTimeUs int64
+	currThroughputBytes       int64
+	lock                      sync.Mutex
+	baseAligningTimeUs        int64
+}
+
+func newSnapshotThrottle(throttleThroughputBytes, checkCycleSecs int64) SnapshotThrottle {
+	return &ThroughputSnapshotThrottle{
+		throttleThroughputBytes:   throttleThroughputBytes,
+		checkCycleSecs:            checkCycleSecs,
+		lastThroughputCheckTimeUs: calculateCheckTimeUs(utils.GetCurrentTimeMs(), 1000*1000/checkCycleSecs),
+		currThroughputBytes:       0,
+		lock:                      sync.Mutex{},
+		baseAligningTimeUs:        1000 * 1000 / checkCycleSecs,
+	}
+}
+
+//ThrottledByThroughput 计算下次可以发送多少数据
+func (t *ThroughputSnapshotThrottle) ThrottledByThroughput(bytes int64) int64 {
+	availableSize := int64(0)
+	nowUs := utils.GetCurrentTimeNs()
+	limitPerCycle := t.throttleThroughputBytes / t.checkCycleSecs
+
+	defer t.lock.Unlock()
+	t.lock.Lock()
+
+	if t.currThroughputBytes+bytes > limitPerCycle {
+		if nowUs-t.lastThroughputCheckTimeUs <= 1000*1000/t.checkCycleSecs {
+			availableSize = limitPerCycle - t.currThroughputBytes
+			t.currThroughputBytes = limitPerCycle
+		} else {
+			availableSize = int64(math.Min(float64(bytes), float64(limitPerCycle)))
+			t.currThroughputBytes = availableSize
+			t.lastThroughputCheckTimeUs = calculateCheckTimeUs(nowUs, t.baseAligningTimeUs)
+		}
+	} else {
+		availableSize = bytes
+		t.currThroughputBytes += availableSize
+	}
+
+	return availableSize
+}
+
+func calculateCheckTimeUs(currTimeUs, baseAligningTimeUs int64) int64 {
+	return currTimeUs / baseAligningTimeUs * baseAligningTimeUs
 }
 
 type Snapshot interface {
@@ -82,3 +135,8 @@ type SnapshotStorage interface {
 	CopyFrom(uri string, opts SnapshotCopierOptions)
 }
 
+type copyFileSession struct {
+}
+
+type remoteFileCopier struct {
+}

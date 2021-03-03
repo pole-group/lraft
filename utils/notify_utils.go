@@ -21,7 +21,7 @@ var (
 	ErrorAddSubscriber        = errors.New("add subscriber failed")
 	publisherCenter           *PublisherCenter
 	publisherOnce             sync.Once
-	defaultFastRingBufferSize = GetInt64FromEnvOptional("github.com/pole-group/lraft.notify.fast-event-buffer.size", 16384)
+	defaultFastRingBufferSize = GetInt64FromEnvOptional("lraft.notify.fast-event-buffer.size", 16384)
 )
 
 type PublisherCenter struct {
@@ -152,7 +152,7 @@ func (p *Publisher) start() {
 }
 
 func (p *Publisher) PublishEvent(event ...Event) {
-	if !p.isClosed {
+	if p.isClosed {
 		return
 	}
 	p.queue <- eventHolder{
@@ -161,7 +161,7 @@ func (p *Publisher) PublishEvent(event ...Event) {
 }
 
 func (p *Publisher) PublishEventNonBlock(events ...Event) bool {
-	if !p.isClosed {
+	if p.isClosed {
 		return false
 	}
 	select {
@@ -171,6 +171,22 @@ func (p *Publisher) PublishEventNonBlock(events ...Event) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func (p *Publisher) PublishEventWithTimeout(timeout time.Duration,
+	events ...Event) (bool, error) {
+	if p.isClosed {
+		return false, fmt.Errorf("this publisher already close")
+	}
+	t := time.NewTimer(timeout)
+	select {
+	case p.queue <- eventHolder{
+		events: events,
+	}:
+		return true, nil
+	case <-t.C:
+		return false, fmt.Errorf("publish event timeout")
 	}
 }
 
@@ -196,7 +212,7 @@ func (p *Publisher) openHandler() {
 
 	defer func() {
 		if err := recover(); err != nil {
-			fmt.Printf("dispose fast event has error : %s\n", err)
+			RaftLog.Error("dispose fast event has error : %s", err)
 		}
 	}()
 
@@ -210,7 +226,7 @@ func (p *Publisher) openHandler() {
 	for {
 		select {
 		case e := <-p.queue:
-			fmt.Printf("handler receive fast event : %s\n", e)
+			RaftLog.Debug("handler receive fast event : %s", e)
 			p.notifySubscriber(e)
 		case <-p.ctx.Done():
 			p.shutdown()
@@ -229,7 +245,7 @@ func (p *Publisher) notifySubscriber(events eventHolder) {
 
 			defer func() {
 				if err := recover(); err != nil {
-					fmt.Printf("notify subscriber has error : %s \n", err)
+					RaftLog.Error("notify subscriber has error : %s", err)
 				}
 			}()
 

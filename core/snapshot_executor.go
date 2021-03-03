@@ -60,6 +60,23 @@ func onSnapshotSaveDone(st entity.Status, meta *raft.SnapshotMeta, writer Snapsh
 
 }
 
+type SnapshotExecutorOptions func(opt *SnapshotExecutorOption)
+
+type SnapshotExecutorOption struct {
+	Uri                    string
+	FsmCaller              FSMCaller
+	node                   *nodeImpl
+	logMgn                 LogManager
+	initTerm               int64
+	Addr                   entity.Endpoint
+	FilterBeforeCopyRemote bool
+	SnapshotThrottle       SnapshotThrottle
+}
+
+func newSnapshotExecutor(options ...SnapshotExecutorOptions) (*SnapshotExecutor, error) {
+	return nil, nil
+}
+
 type SnapshotExecutor struct {
 	node                *nodeImpl
 	lastSnapshotTerm    int64
@@ -74,6 +91,14 @@ type SnapshotExecutor struct {
 	logMgn              LogManager
 	loadingSnapshotMeta raft.SnapshotMeta
 	downloadingSnapshot atomic.Value // DownloadingSnapshot
+}
+
+func (se *SnapshotExecutor) Init(arg interface{}) error {
+	opt := arg.(*SnapshotExecutorOption)
+	return nil
+}
+
+func (se *SnapshotExecutor) Shutdown() {
 
 }
 
