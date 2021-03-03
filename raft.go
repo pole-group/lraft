@@ -9,7 +9,15 @@ import (
 	"github.com/pole-group/lraft/entity"
 )
 
+type Options func(opt *Option)
+
+type Option struct {
+	GroupID  string
+	ServerID entity.PeerId
+	NodeOpt  *core.NodeOptions
+}
+
 //NewRaftNode 创建一个 Raft 节点
-func NewRaftNode(groupID string, serverID *entity.PeerId, opts *core.NodeOptions) core.Node {
+func NewRaftNode(options ...Options) core.Node {
 	return nil
 }

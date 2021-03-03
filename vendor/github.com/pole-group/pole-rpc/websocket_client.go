@@ -12,13 +12,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/jjeffcaii/reactor-go"
 	"github.com/jjeffcaii/reactor-go/flux"
 	"github.com/jjeffcaii/reactor-go/mono"
 	"github.com/jjeffcaii/reactor-go/scheduler"
+	"google.golang.org/protobuf/proto"
 )
 
 type webSocketRpcContext struct {
@@ -27,6 +27,7 @@ type webSocketRpcContext struct {
 	fSink flux.Sink
 }
 
+//newWsMultiRpcContext
 func newWsMultiRpcContext(sink flux.Sink) RpcClientContext {
 	return &webSocketRpcContext{
 		fSink: sink,
@@ -50,7 +51,7 @@ type WebSocketClient struct {
 	done          chan bool
 }
 
-func newWebSocketClient(openTSL bool) (*WebSocketClient, error) {
+func newWebSocketClient(opt ClientOption) (*WebSocketClient, error) {
 	wsc := &WebSocketClient{
 		lock:          sync.RWMutex{},
 		clientMap:     make(map[string]*websocket.Conn),
@@ -63,7 +64,7 @@ func newWebSocketClient(openTSL bool) (*WebSocketClient, error) {
 	supplier := func(endpoint Endpoint) (*websocket.Conn, error) {
 		host := fmt.Sprintf("%s:%d", endpoint.Host, endpoint.Port)
 		var u url.URL
-		if openTSL {
+		if opt.OpenTSL {
 			u = url.URL{Scheme: "wss", Host: host, Path: "/pole_rpc"}
 		} else {
 			u = url.URL{Scheme: "ws", Host: host, Path: "/pole_rpc"}
@@ -125,7 +126,7 @@ func (wsc *WebSocketClient) AddChain(filter func(req *ServerRequest)) {
 	wsc.bc.AddChain(filter)
 }
 
-func (wsc *WebSocketClient) CheckConnection(endpoint Endpoint) (bool, error)  {
+func (wsc *WebSocketClient) CheckConnection(endpoint Endpoint) (bool, error) {
 	conn, err := wsc.computeIfAbsent(endpoint)
 	if err != nil {
 		return false, err

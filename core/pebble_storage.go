@@ -264,11 +264,12 @@ func (pls *pebbleLogStorage) AppendEntry(entry *entity.LogEntry) (bool, error) {
 	return true, nil
 }
 
+//AppendEntries 追加RaftLog日志信息
 func (pls *pebbleLogStorage) AppendEntries(entries []*entity.LogEntry) (int, error) {
 	if entries == nil || len(entries) == 0 {
 		return 0, nil
 	}
-
+	// 这里需不需要保证原子性？还是尽最大可能的刷新所有的日志条目
 	batch := pls.pebbleDB.NewBatch()
 
 	defer func() {

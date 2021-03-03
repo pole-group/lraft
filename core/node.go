@@ -7,6 +7,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -172,7 +173,7 @@ func (cc *ConfigurationCtx) IsBusy() bool {
 	return cc.stage != StageNone
 }
 
-func (cc *ConfigurationCtx) flush(newConf, oldConf *entity.Configuration) {
+func (cc *ConfigurationCtx) flush(newConf, oldConf *entity.Configuration) error {
 	newPeers := newConf.ListPeers()
 	newLearners := newConf.ListLearners()
 	if oldConf == nil || oldConf.IsEmpty() {
@@ -184,7 +185,7 @@ func (cc *ConfigurationCtx) flush(newConf, oldConf *entity.Configuration) {
 		cc.oldPeers = oldConf.ListPeers()
 		cc.oldLearners = oldConf.ListLearners()
 	}
-	cc.node.unsafeApplyConfiguration(newConf, oldConf, true)
+	return cc.node.unsafeApplyConfiguration(newConf, oldConf, true)
 }
 
 func (cc *ConfigurationCtx) Reset(st entity.Status) {
@@ -278,11 +279,9 @@ type Node interface {
 	GetNodeTargetPriority() int32
 }
 
+//go:generate stringer -type NodeState
 type NodeState int
 
-/*
-
- */
 const (
 	StateLeader        NodeState = iota // It's a leader
 	StateTransferring                   // It's transferring leadership
@@ -294,6 +293,32 @@ const (
 	StateShutdown                       // It's shutdown already
 	StateEnd                            // State end
 )
+
+func _() {
+	// An "invalid array index" compiler error signifies that the constant values have changed.
+	// Re-run the stringer command to generate them again.
+	var x [1]struct{}
+	_ = x[StateLeader-0]
+	_ = x[StateTransferring-1]
+	_ = x[StateCandidate-2]
+	_ = x[StateFollower-3]
+	_ = x[StateError-4]
+	_ = x[StateUninitialized-5]
+	_ = x[StateShutting-6]
+	_ = x[StateShutdown-7]
+	_ = x[StateEnd-8]
+}
+
+const _NodeState_name = "StateLeaderStateTransferringStateCandidateStateFollowerStateErrorStateUninitializedStateShuttingStateShutdownStateEnd"
+
+var _NodeState_index = [...]uint8{0, 11, 28, 42, 55, 65, 83, 96, 109, 117}
+
+func (i NodeState) String() string {
+	if i < 0 || i >= NodeState(len(_NodeState_index)-1) {
+		return "NodeState(" + strconv.FormatInt(int64(i), 10) + ")"
+	}
+	return _NodeState_name[_NodeState_index[i]:_NodeState_index[i+1]]
+}
 
 func (ns NodeState) GetName() string {
 	switch ns {
@@ -378,6 +403,7 @@ func (node *nodeImpl) GetLeaderID() entity.PeerId {
 	return node.leaderID
 }
 
+//GetNodeID unsafe in concurrent
 func (node *nodeImpl) GetNodeID() entity.NodeId {
 	if entity.IsEmptyNodeID(node.nodeID) {
 		node.nodeID = entity.NodeId{
@@ -681,9 +707,7 @@ func (node *nodeImpl) unsafeApplyConfiguration(newConf, oldConf *entity.Configur
 				node.firstLogIndex, node.firstLogIndex+int64(node.nEntries)-1, status)
 		}
 	}
-
-	node.logManager.AppendEntries(entries, closure)
-	return nil
+	return node.logManager.AppendEntries(entries, closure)
 }
 
 //getAlivePeers 获取 Leader 认为存活的节点数据，此方法只能由 Leader 节点进行调用

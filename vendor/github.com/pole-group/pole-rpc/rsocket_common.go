@@ -28,6 +28,7 @@ type rSocketServerRpcContext struct {
 	fSink chan *ServerResponse
 }
 
+//newMultiRsRpcContext 创建用于 Request-Response 的 RpcServerContext
 func newOnceRsRpcContext(mSink reactorM.Sink) *rSocketServerRpcContext {
 	return &rSocketServerRpcContext{
 		req:   atomic.Value{},
@@ -35,10 +36,11 @@ func newOnceRsRpcContext(mSink reactorM.Sink) *rSocketServerRpcContext {
 	}
 }
 
+//newMultiRsRpcContext 创建用于 Request-Channel 的 RpcServerContext
 func newMultiRsRpcContext() *rSocketServerRpcContext {
 	return &rSocketServerRpcContext{
 		req:   atomic.Value{},
-		fSink: make(chan *ServerResponse, 32),
+		fSink: make(chan *ServerResponse, 8),
 	}
 }
 
@@ -46,20 +48,20 @@ func (rpc *rSocketServerRpcContext) GetReq() *ServerRequest {
 	return rpc.req.Load().(*ServerRequest)
 }
 
-func (rpc *rSocketServerRpcContext) Send(resp *ServerResponse) {
+func (rpc *rSocketServerRpcContext) Send(resp *ServerResponse) error {
 	req := rpc.GetReq()
 	resp.FunName = req.FunName
 	resp.RequestId = req.RequestId
 	if rpc.fSink != nil {
 		rpc.fSink <- resp
-		return
+		return nil
 	}
 	if rpc.mSink != nil {
 		rpc.mSink.Success(resp)
 		rpc.Complete()
-		return
+		return nil
 	}
-	panic(ErrorCannotResponse)
+	return ErrorCannotResponse
 }
 
 func (rpc *rSocketServerRpcContext) Complete() {

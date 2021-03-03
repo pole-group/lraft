@@ -19,7 +19,7 @@ type RpcServerContext interface {
 
 	GetReq() *ServerRequest
 
-	Send(resp *ServerResponse)
+	Send(resp *ServerResponse) error
 
 	Complete()
 }
@@ -74,14 +74,7 @@ func (c *proxyConn) SetWriteDeadline(t time.Time) error {
 	return c.Target.SetWriteDeadline(t)
 }
 
-type ConnectEventType int8
-
-const (
-	ConnectEventForConnected ConnectEventType = iota
-	ConnectEventForDisConnected
-)
-
-type ConnectEventWatcher func(eventType ConnectEventType, con net.Conn)
+type ConnectEventListener func(eventType ConnectEventType, con net.Conn)
 
 type ConnectEvent struct {
 	EventType ConnectEventType
@@ -91,7 +84,7 @@ type ConnectEvent struct {
 type BaseTransportClient struct {
 	rwLock    sync.RWMutex
 	EventChan chan ConnectEvent
-	Watchers  []ConnectEventWatcher
+	Watchers  []ConnectEventListener
 	Filters   []func(req *ServerRequest)
 	CancelFs  []context.CancelFunc
 }
@@ -99,9 +92,9 @@ type BaseTransportClient struct {
 func newBaseClient() *BaseTransportClient {
 	bClient := &BaseTransportClient{
 		rwLock:    sync.RWMutex{},
-		Watchers:  make([]ConnectEventWatcher, 0, 0),
+		Watchers:  make([]ConnectEventListener, 0),
 		EventChan: make(chan ConnectEvent, 16),
-		Filters:   make([]func(req *ServerRequest), 0, 0),
+		Filters:   make([]func(req *ServerRequest), 0),
 	}
 	bClient.startConnectEventListener()
 	return bClient
@@ -129,7 +122,7 @@ func (btc *BaseTransportClient) startConnectEventListener() {
 	}(ctx)
 }
 
-func (btc *BaseTransportClient) AddWatcher(watcher ConnectEventWatcher) {
+func (btc *BaseTransportClient) AddWatcher(watcher ConnectEventListener) {
 	defer btc.rwLock.Unlock()
 	btc.rwLock.Lock()
 	btc.Watchers = append(btc.Watchers, watcher)

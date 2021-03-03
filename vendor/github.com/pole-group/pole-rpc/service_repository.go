@@ -68,7 +68,7 @@ func (erp *DefaultEndpointRepository) Put(name string, endpoint Endpoint) {
 	endpoint.name = name
 	if _, exist := erp.serviceIndex[name]; !exist {
 		erp.serviceIndex[name] = make(map[string]Endpoint)
-		erp.serviceMap[name] = make([]string, 0, 0)
+		erp.serviceMap[name] = make([]string, 0)
 	}
 
 	instance := erp.serviceIndex[name]

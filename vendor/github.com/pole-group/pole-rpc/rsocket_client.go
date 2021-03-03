@@ -11,7 +11,6 @@ import (
 	"net"
 	"sync"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/jjeffcaii/reactor-go"
 	reactorF "github.com/jjeffcaii/reactor-go/flux"
 	reactorM "github.com/jjeffcaii/reactor-go/mono"
@@ -19,6 +18,7 @@ import (
 	"github.com/rsocket/rsocket-go/core/transport"
 	"github.com/rsocket/rsocket-go/payload"
 	"github.com/rsocket/rsocket-go/rx/flux"
+	"google.golang.org/protobuf/proto"
 )
 
 type RSocketClient struct {
@@ -34,7 +34,7 @@ type proxyRSocketClient struct {
 }
 
 //TODO 后续改造成为 Option 的模式
-func newRSocketClient(openTSL bool) (*RSocketClient, error) {
+func newRSocketClient(opt ClientOption) (*RSocketClient, error) {
 
 	client := &RSocketClient{
 		rwLock:  sync.RWMutex{},
@@ -58,7 +58,7 @@ func newRSocketClient(openTSL bool) (*RSocketClient, error) {
 				if err != nil {
 					return nil, err
 				}
-				if openTSL {
+				if opt.OpenTSL {
 					conn = tls.Client(conn, &tls.Config{})
 				}
 

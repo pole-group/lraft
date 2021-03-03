@@ -21,8 +21,8 @@ import (
 每个RaftLogFile的命名规则为（${firstLogIndex} + "_" + ${lastLogIndex}.raftLog）
 */
 
-//SimpleFileLogStorage 简单的RaftLog实现，主要是为了锻炼数据的组织代码编写以及根据自己的理解写一个简单的RaftLog存储实现
-type SimpleFileLogStorage struct {
+//simpleFileLogStorage 简单的RaftLog实现，主要是为了锻炼数据的组织代码编写以及根据自己的理解写一个简单的RaftLog存储实现
+type simpleFileLogStorage struct {
 	lock               sync.RWMutex
 	opt                LogStorageOption
 	currentRaftLogFile raftLogFile
@@ -64,15 +64,15 @@ func newSimpleFileStorage(options ...LogStorageOptions) (LogStorage, error) {
 	return nil, nil
 }
 
-func (sfl *SimpleFileLogStorage) GetFirstLogIndex() int64 {
+func (sfl *simpleFileLogStorage) GetFirstLogIndex() int64 {
 	return 0
 }
 
-func (sfl *SimpleFileLogStorage) GetLastLogIndex() int64 {
+func (sfl *simpleFileLogStorage) GetLastLogIndex() int64 {
 	return 0
 }
 
-func (sfl *SimpleFileLogStorage) GetEntry(index int64) *entity.LogEntry {
+func (sfl *simpleFileLogStorage) GetEntry(index int64) *entity.LogEntry {
 	f := sfl.findTargetRaftLogFile(index)
 
 	 _, err := os.OpenFile(filepath.Join(sfl.opt.KvDir, f.Name), os.O_RDONLY, os.ModePerm)
@@ -84,7 +84,7 @@ func (sfl *SimpleFileLogStorage) GetEntry(index int64) *entity.LogEntry {
 	return nil
 }
 
-func (sfl *SimpleFileLogStorage) GetTerm(index int64) int64 {
+func (sfl *simpleFileLogStorage) GetTerm(index int64) int64 {
 	entry := sfl.GetEntry(index)
 	if entry == nil {
 		return 0
@@ -92,7 +92,7 @@ func (sfl *SimpleFileLogStorage) GetTerm(index int64) int64 {
 	return entry.LogID.GetTerm()
 }
 
-func (sfl *SimpleFileLogStorage) findTargetRaftLogFile(index int64) raftLogFile {
+func (sfl *simpleFileLogStorage) findTargetRaftLogFile(index int64) raftLogFile {
 	defer sfl.lock.RUnlock()
 	sfl.lock.RLock()
 	pos := sort.Search(sfl.raftLogDir.size(), func(i int) bool {
@@ -102,26 +102,26 @@ func (sfl *SimpleFileLogStorage) findTargetRaftLogFile(index int64) raftLogFile 
 	return sfl.raftLogDir.get(pos)
 }
 
-func (sfl *SimpleFileLogStorage) AppendEntry(entry *entity.LogEntry) (bool, error) {
+func (sfl *simpleFileLogStorage) AppendEntry(entry *entity.LogEntry) (bool, error) {
 	return true, nil
 }
 
-func (sfl *SimpleFileLogStorage) AppendEntries(entries []*entity.LogEntry) (int, error) {
+func (sfl *simpleFileLogStorage) AppendEntries(entries []*entity.LogEntry) (int, error) {
 	return 0, nil
 }
 
-func (sfl *SimpleFileLogStorage) TruncatePrefix(firstIndexKept int64) bool {
+func (sfl *simpleFileLogStorage) TruncatePrefix(firstIndexKept int64) bool {
 	return false
 }
 
-func (sfl *SimpleFileLogStorage) TruncateSuffix(lastIndexKept int64) bool {
+func (sfl *simpleFileLogStorage) TruncateSuffix(lastIndexKept int64) bool {
 	return false
 }
 
-func (sfl *SimpleFileLogStorage) Rest(nextLogIndex int64) (bool, error) {
+func (sfl *simpleFileLogStorage) Rest(nextLogIndex int64) (bool, error) {
 	return true, nil
 }
 
-func (sfl *SimpleFileLogStorage) Shutdown() error {
+func (sfl *simpleFileLogStorage) Shutdown() error {
 	return nil
 }

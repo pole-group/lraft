@@ -16,7 +16,8 @@ require (
 	github.com/kr/text v0.2.0 // indirect
 	github.com/panjf2000/ants/v2 v2.4.3
 	github.com/pkg/errors v0.9.1
-	github.com/pole-group/pole-rpc v0.0.3-beta
+	github.com/pole-group/pole-rpc v0.0.4-beta
+	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475 // indirect
 	github.com/rsocket/rsocket-go v0.8.0 // indirect
 	golang.org/x/exp v0.0.0-20210212053707-62dc52270d37 // indirect
 	golang.org/x/sys v0.0.0-20210124154548-22da62e12c0c // indirect

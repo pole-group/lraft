@@ -153,13 +153,17 @@ func (l LogId) IsEquals(other LogId) bool {
 	return l.index == other.index && l.term == other.term
 }
 
-func (l *LogId) Checksum() uint64 {
+func (l LogId) Checksum() uint64 {
 	buf := bytes.NewBuffer([]byte{})
 	err := binary.Write(buf, binary.LittleEndian, l.index)
 	utils.CheckErr(err)
 	err = binary.Write(buf, binary.LittleEndian, l.term)
 	utils.CheckErr(err)
 	return utils.Checksum(buf.Bytes())
+}
+
+func (l LogId) Copy() LogId {
+	return NewLogID(l.index, l.term)
 }
 
 // Ballot start

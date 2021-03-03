@@ -302,9 +302,8 @@ func newSnapshotJob(node *nodeImpl, mgn *RaftNodeJobManager) repeatJob {
 func (sj *SnapshotJob) start() {
 	atomic.StoreInt32((*int32)(&sj.stopSign), int32(OpenJob))
 
-	polerpc.GoEmpty(func() {
+	polerpc.Go(nil, func(arg interface{}) {
 		for range sj.snapshotSign {
-
 		}
 	})
 
@@ -500,7 +499,7 @@ func electSelf(node *nodeImpl) {
 	node.voteCtx.Grant(node.serverID)
 	// 如果当前已经有超过半数的 Follower 同意了自己的 Leader 竞争选举，那么就正式成为 Leader
 	if node.voteCtx.IsGrant() {
-		becomeLeader(node)
+		_ = becomeLeader(node)
 	}
 }
 
@@ -603,7 +602,7 @@ func handleRequestVoteResponse(node *nodeImpl, peer entity.PeerId, term int64, r
 	if resp.Granted {
 		node.voteCtx.Grant(peer)
 		if node.voteCtx.IsGrant() {
-			becomeLeader(node)
+			_ = becomeLeader(node)
 		}
 	}
 }
@@ -663,7 +662,7 @@ func stepDown(node *nodeImpl, term int64, wakeupCandidate bool, status entity.St
 	node.resetLeaderId(entity.EmptyPeer, status)
 	node.state = StateFollower
 	// 清空自己的配置信息，这个信息只能以 Leader 的为准
-	node.confCtx.Reset()
+	node.confCtx.Reset(status)
 	node.lastLeaderTimestamp = utils.GetCurrentTimeMs()
 	if node.snapshotExecutor != nil {
 		node.snapshotExecutor.stopDownloadingSnapshot(term)
@@ -695,7 +694,7 @@ func stepDown(node *nodeImpl, term int64, wakeupCandidate bool, status entity.St
 	}
 }
 
-func becomeLeader(node *nodeImpl) {
+func becomeLeader(node *nodeImpl) error {
 	if err := utils.RequireTrue(node.state == StateCandidate, "illegal state %s", node.state.GetName()); err != nil {
 		panic(err)
 	}
@@ -729,10 +728,13 @@ func becomeLeader(node *nodeImpl) {
 
 	node.ballotBox.RestPendingIndex(node.logManager.GetLastLogIndex() + 1)
 	if node.confCtx.IsBusy() {
-		panic(fmt.Errorf("node conf ctx is busy : %#v", node.confCtx.stage))
+		return fmt.Errorf("node conf ctx is busy : %#v", node.confCtx.stage)
 	}
-	node.confCtx.flush(node.conf.GetConf(), node.conf.GetOldConf())
+	if err := node.confCtx.flush(node.conf.GetConf(), node.conf.GetOldConf()); err != nil {
+		return err
+	}
 	node.raftNodeJobMgn.startJob(JobForStepDown)
+	return nil
 }
 
 func doSnapshot(node *nodeImpl, done Closure) {

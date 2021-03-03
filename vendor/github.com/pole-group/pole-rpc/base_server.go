@@ -6,67 +6,54 @@ package pole_rpc
 
 import (
 	"sync"
-
-	"github.com/golang/protobuf/proto"
 )
-
-type reqRespHandler struct {
-	handler RequestResponseHandler
-}
-
-type reqChannelHandler struct {
-	supplier func() proto.Message
-	handler  RequestChannelHandler
-}
 
 type dispatcher struct {
 	Label             string
 	lock              sync.RWMutex
-	reqRespHandler    map[string]reqRespHandler
-	reqChannelHandler map[string]reqChannelHandler
+	reqRespHandler    map[string]RequestResponseHandler
+	reqChannelHandler map[string]RequestChannelHandler
 }
 
 func newDispatcher(label string) dispatcher {
 	return dispatcher{
 		Label:             label,
 		lock:              sync.RWMutex{},
-		reqRespHandler:    make(map[string]reqRespHandler),
-		reqChannelHandler: make(map[string]reqChannelHandler),
+		reqRespHandler:    make(map[string]RequestResponseHandler),
+		reqChannelHandler: make(map[string]RequestChannelHandler),
 	}
 }
 
 func (r *dispatcher) FindReqRespHandler(key string) RequestResponseHandler {
 	defer r.lock.RUnlock()
 	r.lock.RLock()
-	return r.reqRespHandler[key].handler
+	return r.reqRespHandler[key]
 }
 
 func (r *dispatcher) FindReqChannelHandler(key string) RequestChannelHandler {
 	defer r.lock.RUnlock()
 	r.lock.RLock()
-	return r.reqChannelHandler[key].handler
+	return r.reqChannelHandler[key]
 }
 
-func (r *dispatcher) registerRequestResponseHandler(key string, handler RequestResponseHandler) {
+func (r *dispatcher) registerRequestResponseHandler(key string, handler RequestResponseHandler) bool {
 	defer r.lock.Unlock()
 	r.lock.Lock()
 
 	if _, ok := r.reqRespHandler[key]; ok {
-		return
+		return false
 	}
-	r.reqRespHandler[key] = reqRespHandler{
-		handler: handler,
-	}
+	r.reqRespHandler[key] = handler
+	return true
 }
 
-func (r *dispatcher) registerRequestChannelHandler(key string, handler RequestChannelHandler) {
+func (r *dispatcher) registerRequestChannelHandler(key string, handler RequestChannelHandler) bool {
 	defer r.lock.Unlock()
 	r.lock.Lock()
 
 	if _, ok := r.reqChannelHandler[key]; ok {
-		return
+		return false
 	}
-	r.reqChannelHandler[key] = reqChannelHandler{
-		handler: handler,
-	}
+	r.reqChannelHandler[key] = handler
+	return true
 }

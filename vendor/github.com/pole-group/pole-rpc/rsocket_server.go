@@ -13,7 +13,6 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/jjeffcaii/reactor-go"
 	reactorF "github.com/jjeffcaii/reactor-go/flux"
 	reactorM "github.com/jjeffcaii/reactor-go/mono"
@@ -23,6 +22,7 @@ import (
 	"github.com/rsocket/rsocket-go/payload"
 	"github.com/rsocket/rsocket-go/rx/flux"
 	"github.com/rsocket/rsocket-go/rx/mono"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -34,6 +34,7 @@ type RSocketDispatcher struct {
 	pool scheduler.Scheduler
 }
 
+//newRSocketDispatcher 请求分发，主要作用是将每一个 ServerRequest 分发给对应的 Handler
 func newRSocketDispatcher(label string) *RSocketDispatcher {
 	return &RSocketDispatcher{
 		dispatcher: newDispatcher(label),
@@ -41,7 +42,8 @@ func newRSocketDispatcher(label string) *RSocketDispatcher {
 	}
 }
 
-func (r *RSocketDispatcher) createRequestResponseSocket() rsocket.OptAbstractSocket {
+//createRequestResponse
+func (r *RSocketDispatcher) createRequestResponse() rsocket.OptAbstractSocket {
 	return rsocket.RequestResponse(func(msg payload.Payload) mono.Mono {
 		body := msg.Data()
 		req := &ServerRequest{}
@@ -73,7 +75,8 @@ func (r *RSocketDispatcher) createRequestResponseSocket() rsocket.OptAbstractSoc
 	})
 }
 
-func (r *RSocketDispatcher) createRequestChannelSocket() rsocket.OptAbstractSocket {
+//createRequestChannel
+func (r *RSocketDispatcher) createRequestChannel() rsocket.OptAbstractSocket {
 	return rsocket.RequestChannel(func(requests flux.Flux) (responses flux.Flux) {
 		rpcCtx := newMultiRsRpcContext()
 		requests.
@@ -90,7 +93,7 @@ func (r *RSocketDispatcher) createRequestChannelSocket() rsocket.OptAbstractSock
 					}
 				}
 				if err != nil {
-					rpcCtx.Send(&ServerResponse{
+					return rpcCtx.Send(&ServerResponse{
 						Code: 0,
 						Msg:  err.Error(),
 					})
@@ -99,7 +102,7 @@ func (r *RSocketDispatcher) createRequestChannelSocket() rsocket.OptAbstractSock
 			}).
 			DoOnError(func(e error) {
 				RpcLog.Error("an exception occurred while processing the request : %#v", e)
-				rpcCtx.Send(&ServerResponse{
+				_ = rpcCtx.Send(&ServerResponse{
 					Code: -1,
 					Msg:  e.Error(),
 				})
@@ -136,6 +139,16 @@ type RSocketServer struct {
 	ErrChan    chan error
 }
 
+//AddConnectEventListener
+func (rs *RSocketServer) AddConnectEventListener(listener ConnectEventListener) {
+	rs.ConnMgr.AddConnectEventListener(listener)
+}
+
+//RemoveConnectEventListener
+func (rs *RSocketServer) RemoveConnectEventListener(listener ConnectEventListener) {
+	rs.ConnMgr.RemoveConnectEventListener(listener)
+}
+
 func (rs *RSocketServer) RegisterRequestHandler(funName string, handler RequestResponseHandler) {
 	rs.dispatcher.registerRequestResponseHandler(funName, handler)
 }
@@ -144,13 +157,17 @@ func (rs *RSocketServer) RegisterChannelRequestHandler(funName string, handler R
 	rs.dispatcher.registerRequestChannelHandler(funName, handler)
 }
 
-func NewRSocketServer(ctx context.Context, label string, port int32, openTSL bool) *RSocketServer {
+//newRSocketServer 创建一个 RSocketServer
+func newRSocketServer(ctx context.Context, opt ServerOption) *RSocketServer {
 	r := RSocketServer{
 		IsReady:    make(chan int8),
-		dispatcher: newRSocketDispatcher(label),
+		dispatcher: newRSocketDispatcher(opt.Label),
 		ErrChan:    make(chan error),
 		ConnMgr: &ConnManager{
-			rwLock:         sync.RWMutex{},
+			rwLock: sync.RWMutex{},
+			listeners: NewConcurrentSlice(func(opts *CSliceOptions) {
+				opts.capacity = 16
+			}),
 			connRepository: map[string]net.Conn{},
 		},
 	}
@@ -162,7 +179,7 @@ func NewRSocketServer(ctx context.Context, label string, port int32, openTSL boo
 				r.ErrChan <- nil
 			}).
 			Acceptor(func(setup payload.SetupPayload, sendingSocket rsocket.CloseableRSocket) (socket rsocket.RSocket, err error) {
-				return rsocket.NewAbstractSocket(r.dispatcher.createRequestResponseSocket(), r.dispatcher.createRequestChannelSocket()), nil
+				return rsocket.NewAbstractSocket(r.dispatcher.createRequestResponse(), r.dispatcher.createRequestChannel()), nil
 			}).
 			Transport(func(ctx context.Context) (transport.ServerTransport, error) {
 				serverTransport := transport.NewTCPServerTransport(func(ctx context.Context) (net.Listener, error) {
@@ -170,13 +187,13 @@ func NewRSocketServer(ctx context.Context, label string, port int32, openTSL boo
 					var err error
 					listener, err = net.ListenTCP("tcp", &net.TCPAddr{
 						IP:   net.ParseIP("0.0.0.0"),
-						Port: int(port),
+						Port: int(opt.Port),
 						Zone: "",
 					})
 					if err != nil {
 						return nil, err
 					}
-					if openTSL {
+					if opt.OpenTSL {
 						listener = tls.NewListener(listener, &tls.Config{})
 					}
 					return listener, err
@@ -192,9 +209,21 @@ func NewRSocketServer(ctx context.Context, label string, port int32, openTSL boo
 
 type ConnManager struct {
 	rwLock         sync.RWMutex
+	listeners      *ConcurrentSlice
 	connRepository map[string]net.Conn
 }
 
+//AddConnectEventListener
+func (cm *ConnManager) AddConnectEventListener(listener ConnectEventListener) {
+	cm.listeners.Add(listener)
+}
+
+//RemoveConnectEventListener
+func (cm *ConnManager) RemoveConnectEventListener(listener ConnectEventListener) {
+	cm.listeners.Remove(listener)
+}
+
+//PutConn 添加一个 transport.TCPConn
 func (cm *ConnManager) PutConn(conn *transport.TCPConn) {
 	d := reflect.ValueOf(conn).Elem()
 	cf := d.FieldByName("conn")
@@ -204,8 +233,17 @@ func (cm *ConnManager) PutConn(conn *transport.TCPConn) {
 	defer cm.rwLock.Unlock()
 	cm.rwLock.Lock()
 	cm.connRepository[netCon.RemoteAddr().String()] = netCon
+
+	Go(netCon, func(arg interface{}) {
+		conn := arg.(net.Conn)
+		cm.listeners.ForEach(func(index int32, v interface{}) {
+			listener := v.(ConnectEventListener)
+			listener(ConnectEventForConnected, conn)
+		})
+	})
 }
 
+//RemoveConn 移除某一个 transport.TCPConn
 func (cm *ConnManager) RemoveConn(conn *transport.TCPConn) {
 	d := reflect.ValueOf(conn).Elem()
 	cf := d.FieldByName("conn")
@@ -215,6 +253,14 @@ func (cm *ConnManager) RemoveConn(conn *transport.TCPConn) {
 	defer cm.rwLock.Unlock()
 	cm.rwLock.Lock()
 	delete(cm.connRepository, netCon.RemoteAddr().String())
+
+	Go(netCon, func(arg interface{}) {
+		conn := arg.(net.Conn)
+		cm.listeners.ForEach(func(index int32, v interface{}) {
+			listener := v.(ConnectEventListener)
+			listener(ConnectEventForDisConnected, conn)
+		})
+	})
 }
 
 type poleServerTransport struct {
@@ -226,9 +272,8 @@ type poleServerTransport struct {
 func (p *poleServerTransport) Accept(acceptor transport.ServerTransportAcceptor) {
 	proxy := func(ctx context.Context, tp *transport.Transport, onClose func(*transport.Transport)) {
 		p.rServer.ConnMgr.PutConn(tp.Connection().(*transport.TCPConn))
-
 		wrapperOnClose := func(tp *transport.Transport) {
-			p.rServer.ConnMgr.PutConn(tp.Connection().(*transport.TCPConn))
+			p.rServer.ConnMgr.RemoveConn(tp.Connection().(*transport.TCPConn))
 			onClose(tp)
 		}
 		acceptor(ctx, tp, wrapperOnClose)
@@ -243,6 +288,10 @@ func (p *poleServerTransport) Listen(ctx context.Context, notifier chan<- bool) 
 	return p.target.Listen(ctx, notifier)
 }
 
+// Closer is the interface that wraps the basic Close method.
+//
+// The behavior of Close after the first call is undefined.
+// Specific implementations may document their own behavior.
 func (p *poleServerTransport) Close() error {
 	return p.target.Close()
 }

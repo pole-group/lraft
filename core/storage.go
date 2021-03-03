@@ -7,7 +7,9 @@ package core
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
+	"time"
 
 	polerpc "github.com/pole-group/pole-rpc"
 
@@ -17,7 +19,8 @@ import (
 )
 
 const (
-	ConfPreFix string = "conf_"
+	ConfPreFix          string = "conf_"
+	AppendLogRetryTimes        = 50
 )
 
 var (
@@ -52,6 +55,7 @@ func (rms *RaftMetaStorage) save() {
 type LogManagerOptions func(opt *LogManagerOption)
 
 type LogManagerOption struct {
+	MaxEventQueueSize int64
 }
 
 type LogManager interface {
@@ -61,7 +65,7 @@ type LogManager interface {
 
 	Join()
 
-	AppendEntries(entries []*entity.LogEntry, done Closure) error
+	AppendEntries(entries []*entity.LogEntry, done *StableClosure) error
 
 	SetSnapshot(meta *raft.SnapshotMeta)
 
@@ -75,11 +79,11 @@ type LogManager interface {
 
 	GetLastLogIndex() int64
 
-	GetLastLogID(isFlush bool) *entity.LogId
+	GetLastLogID(isFlush bool) entity.LogId
 
-	GetConfiguration(index int64) *entity.ConfigurationEntry
+	GetConfiguration(index int64) (*entity.ConfigurationEntry, error)
 
-	CheckAndSetConfiguration(current *entity.ConfigurationEntry)
+	CheckAndSetConfiguration(current *entity.ConfigurationEntry) *entity.ConfigurationEntry
 
 	Wait(expectedLastLogIndex int64, cb NewLogCallback, replicator *Replicator) int64
 
@@ -154,10 +158,11 @@ func newLogManager(options ...LogManagerOptions) (LogManager, error) {
 }
 
 func (lMgn *logManagerImpl) init() error {
+	maxQueueSize := int64(math.Max(float64(lMgn.opt.MaxEventQueueSize), float64(16384)))
 	if err := utils.RegisterSubscriber(lMgn); err != nil {
 		return err
 	}
-	if err := utils.RegisterPublisher(context.Background(), &StableClosureEvent{}, 1024); err != nil {
+	if err := utils.RegisterPublisher(context.Background(), &StableClosureEvent{}, maxQueueSize); err != nil {
 		return err
 	}
 	return nil
@@ -175,21 +180,267 @@ func (lMgn *logManagerImpl) Join() {
 
 }
 
-func (lMgn *logManagerImpl) AppendEntries(entries []*entity.LogEntry, done Closure) error {
+//AppendEntries 追加日志条目
+func (lMgn *logManagerImpl) AppendEntries(entries []*entity.LogEntry, done *StableClosure) error {
 	if err := utils.RequireTrue(done != nil, "done must not be nil"); err != nil {
 		return err
 	}
+	doUnlock := true
+	defer func() {
+		if doUnlock {
+			lMgn.lock.Unlock()
+		}
+	}()
+	lMgn.lock.Lock()
+	if len(entries) != 0 && !lMgn.checkAndResolveConflict(entries, done) {
+		return nil
+	}
+	for _, entry := range entries {
+		if lMgn.raftOpt.EnableLogEntryChecksum {
+			entry.SetChecksum(entry.Checksum())
+		}
+		oldConf := entity.NewEmptyConfiguration()
+		if entry.LogType == raft.EntryType_EntryTypeConfiguration {
+			oldConf = entity.NewConfiguration(entry.OldPeers, entry.OldLearners)
+		}
+		confEntry := entity.NewConfigurationEntry(entry.LogID, entity.NewConfiguration(entry.Peers, entry.Learners),
+			oldConf)
+		lMgn.confMgn.Add(confEntry)
+	}
 
+	if len(entries) != 0 {
+		done.firstLogIndex = entries[0].LogID.GetIndex()
+		for _, entry := range entries {
+			lMgn.logsInMemory.Add(entry)
+		}
+	}
+	done.entries = entries
+
+	retryTimes := 0
+
+	for {
+		ok, err := utils.PublishEventNonBlock(&StableClosureEvent{
+			closure: done,
+			eType:   LMgnEventForOther,
+		})
+		if ok || err != nil {
+			break
+		}
+		retryTimes++
+		if retryTimes > AppendLogRetryTimes {
+			lMgn.reportError(entity.Ebusy, "LogManager is busy, disk queue overload.")
+			return nil
+		}
+		time.Sleep(time.Duration(1) * time.Millisecond)
+	}
+
+	doUnlock = false
+	if !lMgn.wakeupAllWaiter(&lMgn.lock) {
+		lMgn.notifyLastLogIndexListeners()
+	}
+	return nil
 }
 
+//checkAndResolveConflict 检查和解决日志冲突问题，这里实现了 Follower 如何保证自己的 RaftLog 是和 Leader 一致的，并且出现日志冲突时，Follower
+//是如何判断冲突的位置以及如何将冲突的日志进行清除的
+func (lMgn *logManagerImpl) checkAndResolveConflict(entries []*entity.LogEntry, done *StableClosure) bool {
+	firstLogEntry := entries[0]
+
+	//TODO 为了处理 EntryType_EntryTypeConfiguration ？
+	if firstLogEntry.LogID.GetIndex() == 0 {
+		for _, entry := range entries {
+			entry.LogID.SetIndex(lMgn.lastLogIndex)
+			lMgn.lastLogIndex++
+		}
+		return true
+	} else {
+		if firstLogEntry.LogID.GetIndex() > lMgn.lastLogIndex+1 {
+			polerpc.Go(entity.NewStatus(entity.Einval,
+				fmt.Sprintf("There's gap between first_index=%d and last_log_index=%d",
+					firstLogEntry.LogID.GetIndex(), lMgn.lastLogIndex)), func(arg interface{}) {
+				st := arg.(entity.Status)
+				done.Run(st)
+			})
+			return false
+		}
+
+		appliedIndex := lMgn.appliedId.GetIndex()
+		lastLogEntry := entries[len(entries)-1]
+
+		if lastLogEntry.LogID.GetIndex() < appliedIndex {
+			utils.RaftLog.Warn("Received entries of which the lastLog=%d is not greater than appliedIndex=%d, "+
+				"return immediately with nothing changed.", lastLogEntry.LogID.GetIndex(), appliedIndex)
+			polerpc.Go(entity.StatusOK(), func(arg interface{}) {
+				st := arg.(entity.Status)
+				done.Run(st)
+			})
+			return false
+		}
+
+		if firstLogEntry.LogID.GetIndex() == lMgn.lastLogIndex+1 {
+			lMgn.lastLogIndex = lastLogEntry.LogID.GetIndex()
+		} else {
+			//Follower处理日志冲突，根据接收的 []LogEntry，清理冲突的日志后再继续追加
+			conflictingIndex := 0
+			for ; conflictingIndex < len(entries); conflictingIndex++ {
+				if lMgn.unsafeGetTerm(entries[conflictingIndex].LogID.GetIndex()) != entries[conflictingIndex].LogID.GetTerm() {
+					break
+				}
+			}
+			if conflictingIndex != len(entries) {
+				// 从 entries[conflictingIndex] 开始出现了日志冲突，因此要删除从这个之后的所有 RaftLog
+				if entries[conflictingIndex].LogID.GetIndex() <= lMgn.lastLogIndex {
+					lMgn.unsafeTruncateSuffix(entries[conflictingIndex].LogID.GetIndex() - 1)
+				}
+				lMgn.lastLogIndex = lastLogEntry.LogID.GetIndex()
+			}
+			if conflictingIndex > 0 {
+				entries = entries[conflictingIndex:]
+			}
+		}
+		return true
+	}
+}
+
+//unsafeTruncateSuffix 不是安全的清除日志，仅仅存在于本 Follower/Learner 节点的动作
+func (lMgn *logManagerImpl) unsafeTruncateSuffix(lastIndexKept int64) {
+	if lastIndexKept < lMgn.appliedId.GetIndex() {
+		utils.RaftLog.Error("FATAL ERROR: Can't truncate logs before appliedId=%d, lastIndexKept=%d",
+			lMgn.appliedId.GetIndex(), lastIndexKept)
+		return
+	}
+	lMgn.logsInMemory.RemoveFromLastWhen(func(v interface{}) bool {
+		entry := v.(*entity.LogEntry)
+		return entry.LogID.GetIndex() > lastIndexKept
+	})
+
+	lMgn.lastLogIndex = lastIndexKept
+	lastTermKept := lMgn.unsafeGetTerm(lastIndexKept)
+	if err := utils.RequireTrue(lMgn.lastLogIndex == 0 || lastTermKept != 0, ""); err != nil {
+
+	}
+	utils.RaftLog.Debug("truncate suffix : %d", lastIndexKept)
+	lMgn.confMgn.TruncateSuffix(lastIndexKept)
+
+	lMgn.offerEvent(&StableClosure{
+		lastIndexKept: lastIndexKept,
+		lastTermKept:  lastTermKept,
+	}, LMgnEventForTruncateSuffix)
+}
+
+//unsafeGetTerm 根据 Index 直接从本节点（Leader/Follower/Learner）获取对应的任期信息
+func (lMgn *logManagerImpl) unsafeGetTerm(index int64) int64 {
+	if index == 0 {
+		return 0
+	}
+	lss := lMgn.lastSnapshotId
+	if index == lss.GetIndex() {
+		return lss.GetTerm()
+	}
+	if index > lMgn.lastLogIndex || index < lMgn.firstLogIndex {
+		return 0
+	}
+	entry := lMgn.getEntryFromMemory(index)
+	if entry != nil {
+		return entry.LogID.GetIndex()
+	}
+	return lMgn.getTermFromLogStorage(index)
+}
+
+//SetSnapshot
 func (lMgn *logManagerImpl) SetSnapshot(meta *raft.SnapshotMeta) {
+	utils.RaftLog.Debug("set snapshot : %#v", meta)
+	defer lMgn.lock.Unlock()
+	lMgn.lock.Lock()
 
+	if meta.GetLastIncludedIndex() <= lMgn.lastSnapshotId.GetIndex() {
+		return
+	}
+
+	conf := confFromSnapshotMeta(meta, false)
+	oldConf := confFromSnapshotMeta(meta, true)
+
+	confEntry := entity.NewConfigurationEntry(entity.NewLogID(meta.LastIncludedTerm, meta.LastIncludedTerm), conf, oldConf)
+
+	lMgn.confMgn.Add(confEntry)
+	term := lMgn.unsafeGetTerm(meta.LastIncludedIndex)
+	savedLastSnapshotIndex := lMgn.lastSnapshotId.GetIndex()
+
+	lMgn.lastSnapshotId.SetIndex(meta.LastIncludedIndex)
+	lMgn.lastSnapshotId.SetTerm(meta.LastIncludedTerm)
+
+	if lMgn.lastSnapshotId.Compare(lMgn.appliedId) > 0 {
+		lMgn.appliedId = lMgn.lastSnapshotId.Copy()
+	}
+
+	//TODO 这里为什么不能直接对日志进行裁剪的操作
+
+	// 加载 Snapshot 之后需要进行日志的裁剪动作
+	if term == 0 {
+		lMgn.truncatePrefix(meta.LastIncludedIndex + 1)
+	} else if term == meta.LastIncludedTerm {
+		if savedLastSnapshotIndex > 0 {
+			lMgn.truncatePrefix(savedLastSnapshotIndex + 1)
+		}
+	} else {
+		// 任期不相等
+		if !lMgn.reset(meta.LastIncludedIndex + 1) {
+			utils.RaftLog.Warn("Reset log manager failed, nextLogIndex=%d.", meta.LastIncludedIndex + 1)
+		}
+	}
 }
 
+//confFromSnapshotMeta
+func confFromSnapshotMeta(meta *raft.SnapshotMeta, isOld bool) *entity.Configuration {
+	conf := entity.NewEmptyConfiguration()
+	peers := make([]entity.PeerId, 0)
+	for _, peer := range utils.IF(isOld, meta.OldPeers, meta.Peers).([]string) {
+		p := entity.PeerId{}
+		p.Parse(peer)
+		peers = append(peers, p)
+	}
+	conf.AddPeers(peers)
+
+	learners := make([]entity.PeerId, 0)
+	for _, peer := range utils.IF(isOld, meta.OldLearners, meta.Learners).([]string) {
+		p := entity.PeerId{}
+		p.Parse(peer)
+		learners = append(learners, p)
+	}
+	conf.AddLearners(learners)
+	return conf
+}
+
+//ClearBufferedLogs
 func (lMgn *logManagerImpl) ClearBufferedLogs() {
+	defer lMgn.lock.Unlock()
+	lMgn.lock.Lock()
 
+	if lMgn.lastSnapshotId.GetIndex() != 0 {
+		lMgn.truncatePrefix(lMgn.lastSnapshotId.GetIndex() + 1)
+	}
 }
 
+func (lMgn *logManagerImpl) truncatePrefix(firstIndexKept int64) {
+	lMgn.logsInMemory.RemoveFromFirstWhen(func(v interface{}) bool {
+		return v.(*entity.LogEntry).LogID.GetIndex() < firstIndexKept
+	})
+	if firstIndexKept < lMgn.firstLogIndex {
+		return
+	}
+
+	lMgn.firstLogIndex = firstIndexKept
+	if firstIndexKept > lMgn.lastLogIndex {
+		lMgn.lastLogIndex = firstIndexKept - 1
+	}
+	lMgn.confMgn.TruncatePrefix(firstIndexKept)
+	done := &StableClosure{
+		firstIndexKept: firstIndexKept,
+	}
+	lMgn.offerEvent(done, LMgnEventForTruncatePrefix)
+}
+
+//clearMemoryLogs
 func (lMgn *logManagerImpl) clearMemoryLogs(id entity.LogId) {
 	defer lMgn.lock.Unlock()
 	lMgn.lock.Lock()
@@ -200,6 +451,7 @@ func (lMgn *logManagerImpl) clearMemoryLogs(id entity.LogId) {
 	})
 }
 
+//GetEntry
 func (lMgn *logManagerImpl) GetEntry(index int64) *entity.LogEntry {
 	if index <= 0 {
 		return nil
@@ -274,10 +526,12 @@ func (lMgn *logManagerImpl) getTermFromLogStorage(index int64) int64 {
 	return entry.LogID.GetTerm()
 }
 
+//GetFirstLogIndex
 func (lMgn *logManagerImpl) GetFirstLogIndex() int64 {
 	return lMgn.logStorage.GetFirstLogIndex()
 }
 
+//GetLastLogIndex
 func (lMgn *logManagerImpl) GetLastLogIndex() int64 {
 	return lMgn.getLastLogIndex(false)
 }
@@ -305,19 +559,7 @@ func (lMgn *logManagerImpl) getLastLogIndex(flush bool) int64 {
 		done.f = func(status entity.Status) {
 			done.latch.Done()
 		}
-
-		ok, err := utils.PublishEventNonBlock(&StableClosureEvent{
-			closure: done,
-			eType:   LMgnEventForLastLogID,
-		})
-		if !ok || err != nil {
-			msg := fmt.Sprintf("Log manager is overload, error info : %#v", err)
-			lMgn.reportError(entity.Ebusy, msg)
-			polerpc.Go(entity.NewStatus(entity.Ebusy, msg), func(arg interface{}) {
-				st := arg.(entity.Status)
-				done.Run(st)
-			})
-		}
+		lMgn.offerEvent(done, LMgnEventForLastLogID)
 		return -1
 	}
 	index := f()
@@ -329,21 +571,79 @@ func (lMgn *logManagerImpl) getLastLogIndex(flush bool) int64 {
 	return done.lastLogID.GetIndex()
 }
 
-func (lMgn *logManagerImpl) GetLastLogID(isFlush bool) *entity.LogId {
-	defer lMgn.lock.RUnlock()
-	lMgn.lock.RLock()
-
-	if !isFlush {
-
+func (lMgn *logManagerImpl) offerEvent(done *StableClosure, eType LogMgnEventType) {
+	ok, err := utils.PublishEventNonBlock(&StableClosureEvent{
+		closure: done,
+		eType:   eType,
+	})
+	if !ok || err != nil {
+		msg := fmt.Sprintf("Log manager is overload, error info : %#v", err)
+		lMgn.reportError(entity.Ebusy, msg)
+		polerpc.Go(entity.NewStatus(entity.Ebusy, msg), func(arg interface{}) {
+			st := arg.(entity.Status)
+			done.Run(st)
+		})
 	}
 }
 
-func (lMgn *logManagerImpl) GetConfiguration(index int64) *entity.ConfigurationEntry {
+//GetLastLogID 获取最新的 entity.LogId, 如果设置了需要 flush，则会通过事件机制去利用 WaitGroup 机制去实现获取
+func (lMgn *logManagerImpl) GetLastLogID(isFlush bool) entity.LogId {
+	var done *StableClosure
+	work := func() entity.LogId {
+		defer lMgn.lock.RUnlock()
+		lMgn.lock.RLock()
 
+		if !isFlush {
+			if lMgn.lastLogIndex >= lMgn.firstLogIndex {
+				return entity.NewLogID(lMgn.lastLogIndex, lMgn.unsafeGetTerm(lMgn.lastLogIndex))
+			}
+			return lMgn.lastSnapshotId
+		}
+		if lMgn.lastLogIndex == lMgn.lastSnapshotId.GetIndex() {
+			return lMgn.lastSnapshotId
+		}
+
+		d := &StableClosure{
+			latch: sync.WaitGroup{},
+		}
+		d.latch.Add(1)
+		d.f = func(status entity.Status) {
+			d.latch.Done()
+		}
+		done = d
+		lMgn.offerEvent(d, LMgnEventForLastLogID)
+		return entity.NewEmptyLogID()
+	}
+
+	logId := work()
+	if !entity.IsEmptyLogID(logId) {
+		return logId
+	}
+
+	done.latch.Wait()
+	return done.lastLogID
 }
 
-func (lMgn *logManagerImpl) CheckAndSetConfiguration(current *entity.ConfigurationEntry) {
+//GetConfiguration
+func (lMgn *logManagerImpl) GetConfiguration(index int64) (*entity.ConfigurationEntry, error) {
+	defer lMgn.lock.RUnlock()
+	lMgn.lock.RLock()
+	return lMgn.confMgn.Get(index)
+}
 
+//CheckAndSetConfiguration
+func (lMgn *logManagerImpl) CheckAndSetConfiguration(current *entity.ConfigurationEntry) *entity.ConfigurationEntry {
+	if current == nil {
+		return nil
+	}
+	defer lMgn.lock.RUnlock()
+	lMgn.lock.RLock()
+
+	lastConf := lMgn.confMgn.GetLastConfiguration()
+	if lastConf != nil && !lastConf.IsEmpty() && !current.GetID().IsEquals(lastConf.GetID()) {
+		return lastConf
+	}
+	return current
 }
 
 func (lMgn *logManagerImpl) Wait(expectedLastLogIndex int64, cb NewLogCallback, replicator *Replicator) int64 {
@@ -460,7 +760,7 @@ func (lMgn *logManagerImpl) getEntryFromMemory(index int64) *entity.LogEntry {
 }
 
 func (lMgn *logManagerImpl) notifyLastLogIndexListeners() {
-	lMgn.lastLogIndexListeners.ForEach(func(index int, v interface{}) {
+	lMgn.lastLogIndexListeners.ForEach(func(index int32, v interface{}) {
 		listener := v.(LastLogIndexListener)
 		listener.OnLastLogIndexChanged(lMgn.lastLogIndex)
 	})
@@ -490,6 +790,7 @@ func (abo appendBatchOperator) append(closure *StableClosure) {
 
 func (abo appendBatchOperator) flush() entity.LogId {
 	if abo.size > 0 {
+		// 将所有的日志信息刷新到磁盘中去
 		abo.lastID = abo.lMgn.appendToStorage(abo.toAppend)
 		for _, closure := range abo.closures {
 			closure.entries = make([]*entity.LogEntry, 0)
@@ -501,12 +802,31 @@ func (abo appendBatchOperator) flush() entity.LogId {
 			}
 			closure.Run(st)
 		}
+
+		// 清除暂存的数据
 		abo.closures = make([]*StableClosure, 0)
 		abo.toAppend = make([]*entity.LogEntry, 0)
 	}
 	abo.size = 0
 	abo.bufferSize = 0
 	return abo.lastID
+}
+
+func (lMgn *logManagerImpl) reset(nextLogIndex int64) bool {
+	defer lMgn.lock.Unlock()
+	lMgn.lock.Lock()
+
+	lMgn.logsInMemory.Clear()
+	lMgn.firstLogIndex = nextLogIndex
+	lMgn.lastLogIndex = nextLogIndex - 1
+	lMgn.confMgn.TruncatePrefix(lMgn.firstLogIndex)
+	lMgn.confMgn.TruncateSuffix(lMgn.lastLogIndex)
+
+	lMgn.offerEvent(&StableClosure{
+		nextLogIndex: nextLogIndex,
+	}, LMgnEventForReset)
+
+	return true
 }
 
 func (lMgn *logManagerImpl) setDiskID(id entity.LogId) {
@@ -529,6 +849,7 @@ func (lMgn *logManagerImpl) setDiskID(id entity.LogId) {
 	}
 }
 
+//appendToStorage 将日志条目持久化到外部存储中
 func (lMgn *logManagerImpl) appendToStorage(entries []*entity.LogEntry) entity.LogId {
 	lastID := entity.NewEmptyLogID()
 	if !lMgn.hasError {
@@ -621,25 +942,34 @@ func (lMgn *logManagerImpl) SubscribeType() utils.Event {
 }
 
 type LogStorage interface {
+	//GetFirstLogIndex
 	GetFirstLogIndex() int64
 
+	//GetLastLogIndex
 	GetLastLogIndex() int64
 
+	//GetEntry
 	GetEntry(index int64) *entity.LogEntry
 
+	//GetTerm
 	GetTerm(index int64) int64
 
+	//AppendEntry
 	AppendEntry(entry *entity.LogEntry) (bool, error)
 
+	//AppendEntries
 	AppendEntries(entries []*entity.LogEntry) (int, error)
 
+	//TruncatePrefix
 	TruncatePrefix(firstIndexKept int64) bool
 
+	//TruncateSuffix
 	TruncateSuffix(lastIndexKept int64) bool
 
 	//Rest always use when install snapshot from leader, will clear all exits log and set nextLogIndex
 	Rest(nextLogIndex int64) (bool, error)
 
+	//Shutdown
 	Shutdown() error
 }
 

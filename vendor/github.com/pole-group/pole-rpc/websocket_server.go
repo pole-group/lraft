@@ -12,8 +12,8 @@ import (
 	"net/http"
 	"sync/atomic"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/gorilla/websocket"
+	"google.golang.org/protobuf/proto"
 )
 
 type webSocketServerRpcContext struct {
@@ -44,16 +44,20 @@ func (rpcCtx *webSocketServerRpcContext) GetReq() *ServerRequest {
 	return rpcCtx.req.Load().(*ServerRequest)
 }
 
-func (rpcCtx *webSocketServerRpcContext) Send(resp *ServerResponse) {
+func (rpcCtx *webSocketServerRpcContext) Send(resp *ServerResponse) error {
+	if rpcCtx.sink == nil {
+		return ErrorCannotResponse
+	}
 	rpcCtx.sink <- resp
 	if rpcCtx.once {
 		rpcCtx.Complete()
-		return
 	}
+	return nil
 }
 
 func (rpcCtx *webSocketServerRpcContext) Complete() {
 	close(rpcCtx.sink)
+	rpcCtx.sink = nil
 }
 
 //TODO 待完成
@@ -64,12 +68,12 @@ type WebSocketServer struct {
 	openTSL bool
 }
 
-func newWebSocketServer(ctx context.Context, label string, port int32, openTSL bool) TransportServer {
+func newWebSocketServer(ctx context.Context, opt ServerOption) TransportServer {
 	wss := &WebSocketServer{
-		dispatcher: newDispatcher(label),
+		dispatcher: newDispatcher(opt.Label),
 		ctx:        ctx,
-		port:       port,
-		openTSL:    openTSL,
+		port:       opt.Port,
+		openTSL:    opt.OpenTSL,
 	}
 
 	wss.start()
@@ -124,6 +128,16 @@ func returnResp(resp *ServerResponse, conn *websocket.Conn) {
 		RpcLog.Error("")
 		return
 	}
+}
+
+//AddConnectEventListener 服务端的监听和客户端的会话的状态
+func (wss *WebSocketServer) AddConnectEventListener(listener ConnectEventListener) {
+
+}
+
+//RemoveConnectEventListener
+func (wss *WebSocketServer) RemoveConnectEventListener(listener ConnectEventListener) {
+
 }
 
 func (wss *WebSocketServer) RegisterRequestHandler(funName string, handler RequestResponseHandler) {

@@ -323,7 +323,9 @@ func NewStableClosure(entries []*entity.LogEntry, f func(status entity.Status)) 
 }
 
 func (sc *StableClosure) Run(status entity.Status) {
-	sc.f(status)
+	if sc.f != nil {
+		sc.f(status)
+	}
 }
 
 type OnErrorClosure struct {

@@ -35,13 +35,14 @@ func NewConcurrentSlice(opts ...CSliceOption) *ConcurrentSlice {
 	}
 	return &ConcurrentSlice{
 		lock:     sync.RWMutex{},
-		capacity: 0,
+		capacity: cfg.capacity,
 		size:     0,
 		cursor:   0,
 		values:   make([]interface{}, cfg.capacity),
 	}
 }
 
+//Remove 移除一个元素
 func (cs *ConcurrentSlice) Remove(v interface{}) {
 	defer cs.lock.Unlock()
 	cs.lock.Lock()
@@ -51,43 +52,58 @@ func (cs *ConcurrentSlice) Remove(v interface{}) {
 			target = append(target, item)
 		}
 	}
+	cs.size--
 	cs.values = target
 	cs.cursor = int32(len(cs.values))
 }
 
+//Add 添加一个元素
 func (cs *ConcurrentSlice) Add(v interface{}) {
 	defer cs.lock.Unlock()
 	cs.lock.Lock()
 	if cs.cursor >= cs.capacity {
-		newValues := make([]interface{}, cs.capacity+cs.capacity/2)
-		copy(newValues, cs.values)
-		cs.values = newValues
-		cs.capacity = int32(len(cs.values))
+		cs.grow(cs.capacity + cs.capacity/2)
 	}
 	cs.values[cs.cursor] = v
 	cs.cursor++
+	cs.size++
 }
 
+//grow 数组扩容
+func (cs *ConcurrentSlice) grow(expectCap int32) {
+	newValues := make([]interface{}, expectCap)
+	copyN := copy(newValues, cs.values)
+	if copyN != len(cs.values) {
+		panic(fmt.Errorf("slice grow failed, actual copy value number no equal expect value number"))
+	}
+	cs.values = newValues
+	cs.capacity = int32(len(cs.values))
+}
+
+//GetFirst 获取第一个元素
 func (cs *ConcurrentSlice) GetFirst() interface{} {
 	defer cs.lock.RUnlock()
 	cs.lock.RUnlock()
 	return cs.values[0]
 }
 
+//GetLast 获取最后一个元素
 func (cs *ConcurrentSlice) GetLast() interface{} {
 	defer cs.lock.RUnlock()
 	cs.lock.RUnlock()
 	return cs.values[cs.size-1]
 }
 
-func (cs *ConcurrentSlice) ForEach(consumer func(index int, v interface{})) {
+//ForEach 遍历所有的元素
+func (cs *ConcurrentSlice) ForEach(consumer func(index int32, v interface{})) {
 	defer cs.lock.RUnlock()
-	cs.lock.RUnlock()
-	for i, v := range cs.values {
-		consumer(i, v)
+	cs.lock.RLock()
+	for i := int32(0); i < cs.size; i++ {
+		consumer(i, cs.values[i])
 	}
 }
 
+//Get 获取某个 index 对应的元素
 func (cs *ConcurrentSlice) Get(index int32) (interface{}, error) {
 	defer cs.lock.RUnlock()
 	cs.lock.RUnlock()
@@ -97,35 +113,51 @@ func (cs *ConcurrentSlice) Get(index int32) (interface{}, error) {
 	return cs.values[index], nil
 }
 
+//Size 当前slice的大小
 func (cs *ConcurrentSlice) Size() int32 {
 	defer cs.lock.RUnlock()
 	cs.lock.RUnlock()
 	return cs.size
 }
 
+//NewConcurrentMap 创建一个新的 ConcurrentMap
+func NewConcurrentMap() *ConcurrentMap {
+	return &ConcurrentMap{
+		actualMap: make(map[interface{}]interface{}),
+		rwLock:    sync.RWMutex{},
+	}
+}
+
 type ConcurrentMap struct {
 	actualMap map[interface{}]interface{}
 	rwLock    sync.RWMutex
+	size      int
 }
 
+//Put 存入一个键值对
 func (cm *ConcurrentMap) Put(k, v interface{}) {
 	defer cm.rwLock.Unlock()
 	cm.rwLock.Lock()
 	cm.actualMap[k] = v
+	cm.size++
 }
 
+//Remove 根据 key 删除一个 key-value
 func (cm *ConcurrentMap) Remove(k interface{}) {
 	defer cm.rwLock.Unlock()
 	cm.rwLock.Lock()
 	delete(cm.actualMap, k)
+	cm.size--
 }
 
+//Get 根据 key 获取一个数据
 func (cm *ConcurrentMap) Get(k interface{}) interface{} {
 	defer cm.rwLock.RUnlock()
 	cm.rwLock.RLock()
 	return cm.actualMap[k]
 }
 
+//Contains 判断是否包含某个 key
 func (cm *ConcurrentMap) Contains(k interface{}) bool {
 	defer cm.rwLock.RUnlock()
 	cm.rwLock.RLock()
@@ -133,6 +165,7 @@ func (cm *ConcurrentMap) Contains(k interface{}) bool {
 	return exist
 }
 
+//ForEach 遍历所有的 key-value
 func (cm *ConcurrentMap) ForEach(consumer func(k, v interface{})) {
 	defer cm.rwLock.RUnlock()
 	cm.rwLock.RLock()
@@ -141,6 +174,7 @@ func (cm *ConcurrentMap) ForEach(consumer func(k, v interface{})) {
 	}
 }
 
+//Keys 获取所有的 key 数组
 func (cm *ConcurrentMap) Keys() []interface{} {
 	defer cm.rwLock.RUnlock()
 	cm.rwLock.RLock()
@@ -153,6 +187,7 @@ func (cm *ConcurrentMap) Keys() []interface{} {
 	return keys
 }
 
+//Values 获取所有的 value 数组
 func (cm *ConcurrentMap) Values() []interface{} {
 	defer cm.rwLock.RUnlock()
 	cm.rwLock.RLock()
@@ -165,23 +200,28 @@ func (cm *ConcurrentMap) Values() []interface{} {
 	return values
 }
 
-func (cm *ConcurrentMap) ComputeIfAbsent(key interface{}, supplier func() interface{}) {
+//ComputeIfAbsent 懒Put操作，通过 key 计算是否存在该 key，如果存在，直接返回，否则执行 function 方法计算对应的 value
+func (cm *ConcurrentMap) ComputeIfAbsent(key interface{}, function func(key interface{}) interface{}) interface{} {
 	defer cm.rwLock.Unlock()
 	cm.rwLock.Lock()
 
 	if _, exist := cm.actualMap[key]; !exist {
-		cm.actualMap[key] = supplier()
+		cm.actualMap[key] = function(key)
+		cm.size++
 	}
+	return cm.actualMap[key]
 }
 
+//Clear 清空 map
 func (cm *ConcurrentMap) Clear() {
 	defer cm.rwLock.Unlock()
 	cm.rwLock.Lock()
 	cm.actualMap = make(map[interface{}]interface{})
 }
 
+//Size 返回map的元素个数
 func (cm *ConcurrentMap) Size() int {
-	return len(cm.actualMap)
+	return cm.size
 }
 
 type void struct{}

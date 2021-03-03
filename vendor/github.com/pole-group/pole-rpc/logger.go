@@ -20,8 +20,7 @@ const LogPrefix = "%s %s %s=>%d : "
 type LogLevel int32
 
 const (
-	Trace LogLevel = iota
-	Debug
+	Debug LogLevel = iota
 	Info
 	Warn
 	Error
@@ -32,22 +31,27 @@ const (
 	WarnLevel  = "[warn]"
 	InfoLevel  = "[info]"
 	DebugLevel = "[debug]"
-	TraceLevel = "[trace]"
 
 	TimeFormatStr = "2006-01-02 15:04:05"
 )
 
-var RpcLog Logger = NewTestLogger("lraft-test")
+type LogOptions func(opt *LogOption)
+
+type LogOption struct {
+	Name         string
+	RollingCycle time.Duration
+}
+
+var RpcLog Logger = NewTestLogger("pole-rpc-test")
 
 //InitLogger 初始化一个默认的 Logger
-func InitLogger(baseDir, name string) (err error) {
+func InitLogger(baseDir string) (err error) {
 	filePath = filepath.Join(baseDir, "logs")
 	if err := os.MkdirAll(filePath, os.ModePerm); err != nil {
 		return err
 	}
 	filePath = baseDir
-	RpcLog, err = NewLogger(name)
-	return err
+	return nil
 }
 
 //ResetGlobalLogger 重新设置 Logger
@@ -56,25 +60,31 @@ func ResetGlobalLogger(logger Logger) {
 }
 
 type Logger interface {
+	//SetLevel 设置日志等级
 	SetLevel(level LogLevel)
 
+	//Debug debug 级别日志打印
 	Debug(format string, args ...interface{})
 
+	//Info info 级别日志打印
 	Info(format string, args ...interface{})
 
+	//Warn warn 级别日志打印
 	Warn(format string, args ...interface{})
 
+	//Error error 级别日志打印
 	Error(format string, args ...interface{})
 
-	Trace(format string, args ...interface{})
-
+	//Close 关闭一个 Logger
 	Close()
 
+	//Sink 获取日志的 LogSink 对象，Sink 是实际日志输出的接口
 	Sink() LogSink
 }
 
-type AbstractLogger struct {
-	name         string
+//abstractLogger
+type abstractLogger struct {
+	opt          LogOption
 	sink         LogSink
 	level        LogLevel
 	logEventChan chan LogEvent
@@ -86,24 +96,33 @@ var filePath string
 
 //NewTestLogger 构建测试用的 Logger, 打印在控制台上
 func NewTestLogger(name string) Logger {
-	l := &AbstractLogger{
-		name:         name,
+	l := &abstractLogger{
+		opt: LogOption{
+			Name:         name,
+			RollingCycle: 0,
+		},
 		sink:         &ConsoleLogSink{},
 		logEventChan: make(chan LogEvent, 16384),
 		ctx:          context.Background(),
 	}
-
+	l.sink.Start(l.opt)
 	l.start()
 	return l
 }
 
-func NewLogger(name string) (Logger, error) {
-	f, err := os.OpenFile(filepath.Join(filePath, name+".log"), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0666)
+//NewLogger 创建一个 Logger，并设置日志的文件名为
+func NewLogger(options ...LogOptions) (Logger, error) {
+	opt := new(LogOption)
+	for _, option := range options {
+		option(opt)
+	}
+
+	f, err := os.OpenFile(filepath.Join(filePath, opt.Name+".log"), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0666)
 	if err != nil {
 		return nil, err
 	}
-	l := &AbstractLogger{
-		name: name,
+	l := &abstractLogger{
+		opt: *opt,
 		sink: &FileLogSink{
 			logger: log.New(f, "", log.Lmsgprefix),
 		},
@@ -116,33 +135,26 @@ func NewLogger(name string) (Logger, error) {
 }
 
 //NewLoggerWithSink 构建一个 Logger, 但是日志的真实输出的 LogSink 可以自定义实现
-func NewLoggerWithSink(name string, sink LogSink) Logger {
-	l := &AbstractLogger{
-		name: name,
+func NewLoggerWithSink(sink LogSink, options ...LogOptions) Logger {
+	opt := new(LogOption)
+	for _, option := range options {
+		option(opt)
+	}
+
+	l := &abstractLogger{
+
 		sink: sink,
 		ctx:  context.Background(),
 	}
-
 	l.start()
 	return l
 }
 
-func (l *AbstractLogger) SetLevel(level LogLevel) {
+func (l *abstractLogger) SetLevel(level LogLevel) {
 	atomic.StoreInt32((*int32)(&l.level), int32(level))
 }
 
-func (l *AbstractLogger) Trace(format string, args ...interface{}) {
-	if atomic.LoadInt32(&l.isClose) == 1 {
-		return
-	}
-	l.logEventChan <- LogEvent{
-		Level:  Trace,
-		Format: format,
-		Args:   convertToLogArgs(TraceLevel, time.Now().Format(TimeFormatStr), args...),
-	}
-}
-
-func (l *AbstractLogger) Debug(format string, args ...interface{}) {
+func (l *abstractLogger) Debug(format string, args ...interface{}) {
 	if atomic.LoadInt32(&l.isClose) == 1 {
 		return
 	}
@@ -155,7 +167,7 @@ func (l *AbstractLogger) Debug(format string, args ...interface{}) {
 	})
 }
 
-func (l *AbstractLogger) Info(format string, args ...interface{}) {
+func (l *abstractLogger) Info(format string, args ...interface{}) {
 	if atomic.LoadInt32(&l.isClose) == 1 {
 		return
 	}
@@ -168,7 +180,7 @@ func (l *AbstractLogger) Info(format string, args ...interface{}) {
 	})
 }
 
-func (l *AbstractLogger) Warn(format string, args ...interface{}) {
+func (l *abstractLogger) Warn(format string, args ...interface{}) {
 	if atomic.LoadInt32(&l.isClose) == 1 {
 		return
 	}
@@ -181,7 +193,7 @@ func (l *AbstractLogger) Warn(format string, args ...interface{}) {
 	})
 }
 
-func (l *AbstractLogger) Error(format string, args ...interface{}) {
+func (l *abstractLogger) Error(format string, args ...interface{}) {
 	if atomic.LoadInt32(&l.isClose) == 1 {
 		return
 	}
@@ -194,30 +206,32 @@ func (l *AbstractLogger) Error(format string, args ...interface{}) {
 	})
 }
 
-func (l *AbstractLogger) canLog(level LogLevel, print func()) {
+func (l *abstractLogger) canLog(level LogLevel, print func()) {
 	if atomic.LoadInt32((*int32)(&l.level)) <= int32(level) {
 		print()
 	}
 }
 
-func (l *AbstractLogger) Close() {
+func (l *abstractLogger) Close() {
 	atomic.StoreInt32(&l.isClose, 1)
 	l.ctx.Done()
 	close(l.logEventChan)
 }
 
-func (l *AbstractLogger) Sink() LogSink {
+func (l *abstractLogger) Sink() LogSink {
 	return l.sink
 }
 
-func (l *AbstractLogger) start() {
+//start 开启一个异步任务，监听logEventChan实时将日志信息输出到对应的LogSink
+func (l *abstractLogger) start() {
 	go func(ctx context.Context) {
 		for {
 			var e LogEvent
 			select {
 			case e = <-l.logEventChan:
-				l.sink.OnEvent(l.name, e.Level, LogPrefix+e.Format, e.Args...)
+				l.sink.OnEvent(e.Level, LogPrefix+e.Format, e.Args...)
 			case <-ctx.Done():
+				l.sink.OnEvent(Info, LogPrefix+"close logger")
 				return
 			}
 		}
@@ -231,21 +245,34 @@ type LogEvent struct {
 }
 
 type LogSink interface {
-	OnEvent(name string, level LogLevel, format string, args ...interface{})
+	//Start 开启 LogSink
+	Start(opt LogOption)
+
+	//OnEvent 处理所有的 LogEvent 事件
+	OnEvent(level LogLevel, format string, args ...interface{})
 }
 
 type ConsoleLogSink struct {
 }
 
-func (fl *ConsoleLogSink) OnEvent(name string, level LogLevel, format string, args ...interface{}) {
+func (fl *ConsoleLogSink) Start(opt LogOption) {
+	//do nothing
+}
+
+func (fl *ConsoleLogSink) OnEvent(level LogLevel, format string, args ...interface{}) {
 	fmt.Printf(format+"\n", args...)
 }
 
 type FileLogSink struct {
+	opt    LogOption
 	logger *log.Logger
 }
 
-func (fl *FileLogSink) OnEvent(name string, level LogLevel, format string, args ...interface{}) {
+func (fl *FileLogSink) Start(opt LogOption) {
+	fl.opt = opt
+}
+
+func (fl *FileLogSink) OnEvent(level LogLevel, format string, args ...interface{}) {
 	fl.logger.Printf(format, args...)
 }
 
@@ -254,7 +281,7 @@ func convertToLogArgs(level, time string, args ...interface{}) []interface{} {
 	a := make([]interface{}, len(args)+4)
 	a[0] = level
 	a[1] = time
-	a[2], a[3] = GetCaller(4)
+	a[2], a[3] = GetCaller(6)
 	if args != nil {
 		for i := 4; i < len(a); i++ {
 			a[i] = args[i-4]
@@ -263,6 +290,7 @@ func convertToLogArgs(level, time string, args ...interface{}) []interface{} {
 	return a
 }
 
+//GetCaller 获取调用的代码行
 func GetCaller(depth int) (string, int) {
 	_, file, line, _ := runtime.Caller(depth)
 	return file, line

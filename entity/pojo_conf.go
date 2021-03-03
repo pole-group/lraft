@@ -120,7 +120,7 @@ func (c *Configuration) Diff(rhs, included, excluded *Configuration) {
 }
 
 type ConfigurationEntry struct {
-	id      *LogId
+	id      LogId
 	conf    *Configuration
 	oldConf *Configuration
 }
@@ -129,7 +129,7 @@ func NewEmptyConfigurationEntry() *ConfigurationEntry {
 	return &ConfigurationEntry{}
 }
 
-func NewConfigurationEntry(id *LogId, conf, oldConf *Configuration) *ConfigurationEntry {
+func NewConfigurationEntry(id LogId, conf, oldConf *Configuration) *ConfigurationEntry {
 	return &ConfigurationEntry{
 		id:      id,
 		conf:    conf,
@@ -137,7 +137,7 @@ func NewConfigurationEntry(id *LogId, conf, oldConf *Configuration) *Configurati
 	}
 }
 
-func (ce *ConfigurationEntry) GetID() *LogId {
+func (ce *ConfigurationEntry) GetID() LogId {
 	return ce.id
 }
 
@@ -149,7 +149,7 @@ func (ce *ConfigurationEntry) GetOldConf() *Configuration {
 	return ce.oldConf
 }
 
-func (ce *ConfigurationEntry) SetID(id *LogId) {
+func (ce *ConfigurationEntry) SetID(id LogId) {
 	ce.id = id
 }
 
@@ -221,6 +221,7 @@ func (cm *ConfigurationManager) Add(ce *ConfigurationEntry) bool {
 	return true
 }
 
+//TruncatePrefix 删除在这之前的所有数据
 func (cm *ConfigurationManager) TruncatePrefix(firstIndexKept int64) {
 	l := cm.configurations
 	for {
@@ -233,6 +234,7 @@ func (cm *ConfigurationManager) TruncatePrefix(firstIndexKept int64) {
 	cm.configurations = l
 }
 
+//TruncateSuffix 删除在这之后的所有数据
 func (cm *ConfigurationManager) TruncateSuffix(lastIndexKept int64) {
 	l := cm.configurations
 	for {
@@ -260,10 +262,14 @@ func (cm *ConfigurationManager) GetLastConfiguration() *ConfigurationEntry {
 	return cm.configurations.Front().Value.(*ConfigurationEntry)
 }
 
-func (cm *ConfigurationManager) Get(lastIncludedIndex int64) *ConfigurationEntry {
+func (cm *ConfigurationManager) Get(lastIncludedIndex int64) (*ConfigurationEntry, error) {
 	l := cm.configurations
 	if l.Len() == 0 {
-		utils.RequireTrue(lastIncludedIndex >= cm.snapshot.GetID().GetIndex(), "lastIncludedIndex %d is less than snapshot index %d", lastIncludedIndex, cm.snapshot.GetID().GetIndex())
+		if err := utils.RequireTrue(lastIncludedIndex >= cm.snapshot.GetID().GetIndex(),
+			"lastIncludedIndex %d is less than snapshot index %d", lastIncludedIndex,
+			cm.snapshot.GetID().GetIndex()); err != nil {
+			return nil, err
+		}
 	}
 
 	e := l.Front()
@@ -279,7 +285,7 @@ func (cm *ConfigurationManager) Get(lastIncludedIndex int64) *ConfigurationEntry
 	}
 
 	if e != nil && e.Prev() != nil {
-		return e.Prev().Value.(*ConfigurationEntry)
+		return e.Prev().Value.(*ConfigurationEntry), nil
 	}
-	return cm.snapshot
+	return cm.snapshot, nil
 }
