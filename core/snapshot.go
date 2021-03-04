@@ -8,11 +8,14 @@ import (
 	"io"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/golang/protobuf/proto"
+	polerpc "github.com/pole-group/pole-rpc"
 
 	"github.com/pole-group/lraft/entity"
 	raft "github.com/pole-group/lraft/proto"
+	"github.com/pole-group/lraft/rpc"
 	"github.com/pole-group/lraft/utils"
 )
 
@@ -135,7 +138,166 @@ type SnapshotStorage interface {
 	CopyFrom(uri string, opts SnapshotCopierOptions)
 }
 
+type GetFileResponseClosure struct {
+	RpcResponseClosure
+}
+
 type copyFileSession struct {
+	lock             sync.Mutex
+	st               entity.Status
+	finishLatch      sync.WaitGroup
+	done             *RpcResponseClosure
+	rpcService       *rpc.RaftClient
+	endpoint         entity.Endpoint
+	snapshotThrottle SnapshotThrottle
+	req              *raft.GetFileRequest
+	raftOpt          RaftOptions
+	retryTime        int
+	destPath         string
+	finished         bool
+	ioStream         io.ReadWriteCloser
+	timer            polerpc.Future
+	rpcCall          polerpc.Future
+	maxRetry         int
+	retryIntervalMs  int64
+	timeoutMs        time.Duration
+}
+
+type CopySessionOptions func(opt *CopySessionOption)
+
+type CopySessionOption struct {
+	RpcService       *rpc.RaftClient
+	SnapshotThrottle SnapshotThrottle
+	RaftOpt          RaftOptions
+	Endpoint         entity.Endpoint
+}
+
+func newCopySession(options ...CopySessionOptions) *copyFileSession {
+	opt := new(CopySessionOption)
+	for _, f := range options {
+		f(opt)
+	}
+
+	session := &copyFileSession{
+		lock:             sync.Mutex{},
+		st:               entity.StatusOK(),
+		finishLatch:      sync.WaitGroup{},
+		done:             &RpcResponseClosure{},
+		rpcService:       opt.RpcService,
+		endpoint:         opt.Endpoint,
+		snapshotThrottle: opt.SnapshotThrottle,
+		raftOpt:          opt.RaftOpt,
+		retryTime:        0,
+		destPath:         "",
+		finished:         false,
+		ioStream:         nil,
+		timer:            nil,
+		rpcCall:          nil,
+		maxRetry:         3,
+		retryIntervalMs:  1000,
+		timeoutMs:        time.Duration(10*1000) * time.Millisecond,
+		req:              new(raft.GetFileRequest),
+	}
+
+	session.done.F = func(resp proto.Message, status entity.Status) {
+		session.onRpcReturn(status, resp.(*raft.GetFileResponse))
+	}
+	return session
+}
+
+func (session *copyFileSession) cancel() {
+	defer session.lock.Unlock()
+	session.lock.Lock()
+	if session.finished {
+		return
+	}
+	if session.timer != nil {
+		session.timer.Cancel()
+	}
+	if session.rpcCall != nil {
+		session.rpcCall.Cancel()
+	}
+	if session.st.IsOK() {
+		session.st.SetError(entity.ECanceled, "canceled")
+	}
+}
+
+func (session *copyFileSession) onFinished() {
+	if !session.finished {
+		if !session.st.IsOK() {
+
+		}
+		if session.ioStream != nil {
+			_ = session.ioStream.Close()
+		}
+		session.finished = true
+		session.finishLatch.Done()
+	}
+}
+
+func (session *copyFileSession) sendNextRpc() {
+
+}
+
+func (session *copyFileSession) onRpcReturn(st entity.Status, resp *raft.GetFileResponse) {
+	job := func() bool {
+		defer session.lock.Unlock()
+		session.lock.Lock()
+
+		if session.finished {
+			return true
+		}
+		if !session.st.IsOK() {
+			session.req.Count = 0
+			if st.GetCode() == entity.ECanceled {
+				if session.st.IsOK() {
+					session.st.SetError(st.GetCode(), st.GetMsg())
+					session.onFinished()
+					return false
+				}
+			}
+
+			if st.GetCode() != entity.Eagain {
+				session.retryTime++
+				if session.retryTime+1 >= session.maxRetry {
+					if session.st.IsOK() {
+						session.st.SetError(st.GetCode(), st.GetMsg())
+						session.onFinished()
+						return false
+					}
+				}
+			}
+
+			session.timer = polerpc.DelaySchedule(func() {
+				polerpc.Go(nil, func(arg interface{}) {
+					session.sendNextRpc()
+				})
+			}, session.timeoutMs)
+			return false
+		}
+		session.retryTime = 0
+		if !resp.Eof {
+			session.req.Count = resp.ReadSize
+		}
+		if session.ioStream != nil {
+			n, err := session.ioStream.Write(resp.Data)
+			if n != len(resp.Data) || err != nil {
+				session.st.SetError(entity.EIO, "")
+				session.onFinished()
+				return false
+			}
+		} else {
+
+		}
+		if resp.Eof {
+			session.onFinished()
+			return false
+		}
+		return true
+	}
+	if job() {
+		session.sendNextRpc()
+	}
 }
 
 type remoteFileCopier struct {

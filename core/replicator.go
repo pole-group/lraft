@@ -873,7 +873,7 @@ func (r *Replicator) fillCommonFields(req *raft.AppendEntriesRequest, prevLogInd
 //shutdown
 func (r *Replicator) shutdown() {
 	r.destroy = true
-	r.futures.ForEach(func(index int, v interface{}) {
+	r.futures.ForEach(func(index int32, v interface{}) {
 		v.(polerpc.Future).Cancel()
 	})
 }
@@ -1018,7 +1018,7 @@ func onError(r *Replicator, errCode entity.RaftErrorCode) {
 	case entity.ETimeout:
 		// 触发心跳发送的逻辑
 		r.lock.Unlock()
-		utils.DefaultScheduler.Submit(func() {
+		polerpc.Go(nil, func(arg interface{}) {
 			r.sendHeartbeat(nil)
 		})
 	case entity.EStop:
@@ -1046,7 +1046,7 @@ func onError(r *Replicator, errCode entity.RaftErrorCode) {
 				r.timeoutNowInFly.Cancel()
 				r.timeoutNowInFly = nil
 			}
-			r.futures.ForEach(func(index int, v interface{}) {
+			r.futures.ForEach(func(index int32, v interface{}) {
 				v.(polerpc.Future).Cancel()
 			})
 			if r.waitId >= 0 {
