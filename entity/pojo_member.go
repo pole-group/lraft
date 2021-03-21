@@ -21,6 +21,12 @@ const (
 	ElectionPriorityMinValue   = ElectionPriority(1)
 )
 
+var AnyEndpoint Endpoint = Endpoint{
+	ip:   "0.0.0.",
+	port: 0,
+	desc: "",
+}
+
 type Endpoint struct {
 	ip   string
 	port int64
@@ -53,6 +59,10 @@ func (e Endpoint) Copy() Endpoint {
 		port: e.port,
 		desc: e.desc,
 	}
+}
+
+func (e Endpoint) IsEmptyEndpoint() bool {
+	return e.ip == "" && e.port == 0
 }
 
 func (e Endpoint) Equal(other Endpoint) bool {

@@ -228,7 +228,7 @@ type Node interface {
 
 	GetOptions() NodeOptions
 
-	GetRaftOptions() RaftOptions
+	GetRaftOptions() RaftOption
 
 	IsLeader() bool
 
@@ -354,27 +354,27 @@ type nodeImpl struct {
 	currTerm                 int64
 	firstLogIndex            int64
 	nEntries                 int32
-	lastLeaderTimestamp      int64
-	version                  int64
-	raftNodeJobMgn           *RaftNodeJobManager
-	fsmCaller                FSMCaller
-	targetPriority           int32
-	nodeID                   entity.NodeId
-	serverID                 entity.PeerId
-	leaderID                 entity.PeerId
-	votedId                  entity.PeerId
-	options                  NodeOptions
-	raftOptions              RaftOptions
-	readOnlyOperator         *ReadOnlyOperator
-	confCtx                  *ConfigurationCtx
-	conf                     *entity.ConfigurationEntry
-	voteCtx                  *entity.Ballot
-	preVoteCtx               *entity.Ballot
-	ballotBox                *BallotBox
-	handler                  *raftRpcHandler
-	replicatorGroup          *ReplicatorGroup
-	logManager               LogManager
-	metaStorage              *RaftMetaStorage
+	lastLeaderTimestamp int64
+	version             int64
+	raftNodeJobMgn      *RaftNodeJobManager
+	fsmCaller           FSMCaller
+	targetPriority      int32
+	nodeID              entity.NodeId
+	serverID            entity.PeerId
+	leaderID            entity.PeerId
+	votedId             entity.PeerId
+	options             NodeOptions
+	raftOptions         RaftOption
+	readOnlyOperator    *ReadOnlyOperator
+	confCtx             *ConfigurationCtx
+	conf                *entity.ConfigurationEntry
+	voteCtx             *entity.Ballot
+	preVoteCtx          *entity.Ballot
+	ballotBox           *BallotBox
+	handler             *raftRpcHandler
+	replicatorGroup     *ReplicatorGroup
+	logManager          LogManager
+	metaStorage         *RaftMetaStorage
 	snapshotExecutor         *SnapshotExecutor
 	rpcServer                *rpc.RaftRPCServer
 	shutdownWait             *sync.WaitGroup
@@ -422,7 +422,7 @@ func (node *nodeImpl) GetOptions() NodeOptions {
 	return node.options
 }
 
-func (node *nodeImpl) GetRaftOptions() RaftOptions {
+func (node *nodeImpl) GetRaftOptions() RaftOption {
 	return node.raftOptions
 }
 

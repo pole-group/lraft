@@ -667,7 +667,11 @@ func (fci *FSMCallerImpl) doSnapshotSave(closure SaveSnapshotClosure) {
 	snapshotMeta.LastIncludedIndex = lastAppliedIndex
 	snapshotMeta.LastIncludedTerm = fci.lastAppliedTerm
 
-	confEntry := fci.logManager.GetConfiguration(lastAppliedIndex)
+	confEntry, err := fci.logManager.GetConfiguration(lastAppliedIndex)
+	if err != nil {
+		closure.Run(entity.NewStatus(entity.EInternal, err.Error()))
+		return
+	}
 	if confEntry == nil || confEntry.IsEmpty() {
 		utils.RaftLog.Error("Empty conf entry for lastAppliedIndex=%d", lastAppliedIndex)
 		st := entity.NewEmptyStatus()

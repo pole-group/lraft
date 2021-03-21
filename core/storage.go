@@ -37,7 +37,7 @@ type RaftMetaStorage struct {
 	term     int64
 	path     string
 	voteFor  entity.PeerId
-	raftOpts RaftOptions
+	raftOpts RaftOption
 	isInit   bool
 }
 
@@ -45,7 +45,7 @@ type RaftMetaStorageOptions func(opt *RaftMetaStorageOption)
 
 type RaftMetaStorageOption struct {
 	Path    string
-	RaftOpt RaftOptions
+	RaftOpt RaftOption
 	Node    *nodeImpl
 }
 
@@ -236,7 +236,7 @@ type logManagerImpl struct {
 	logStorage            LogStorage
 	firstLogIndex         int64
 	lastLogIndex          int64
-	raftOpt               RaftOptions
+	raftOpt               RaftOption
 	shutDownLatch         sync.WaitGroup
 	lastLogIndexListeners *polerpc.ConcurrentSlice // < LastLogIndexListener >
 	batchOperator         appendBatchOperator

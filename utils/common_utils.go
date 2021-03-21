@@ -10,6 +10,7 @@ import (
 	"hash/crc64"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/pkg/errors"
 )
@@ -17,6 +18,26 @@ import (
 const (
 	Int64MaxValue = int64(0x7fffffffffffffff)
 )
+
+type AtomicInt64 struct {
+	v int64
+}
+
+func NewAtomicInt64() AtomicInt64 {
+	return AtomicInt64{v: 0}
+}
+
+func (a AtomicInt64) Increment() int64 {
+	return atomic.AddInt64(&a.v, 1)
+}
+
+func (a AtomicInt64) Value() int64 {
+	return atomic.LoadInt64(&a.v)
+}
+
+func (a AtomicInt64) Decrement() int64 {
+	return atomic.AddInt64(&a.v, -1)
+}
 
 func AnalyzeIPAndPort(address string) (ip string, port int) {
 	s := strings.Split(address, ":")

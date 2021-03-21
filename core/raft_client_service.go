@@ -64,6 +64,11 @@ func (rcop *RaftClientOperator) TimeoutNow(endpoint entity.Endpoint, req *proto.
 	return invokeWithClosure(endpoint, rcop.raftClient, rpc.CoreTimeoutNowRequest, req, &done.RpcResponseClosure)
 }
 
+func (rcop *RaftClientOperator) GetFile(endpoint entity.Endpoint, req *proto.GetFileRequest,
+	done *RpcResponseClosure) mono.Mono {
+	return invokeWithClosure(endpoint, rcop.raftClient, rpc.CoreGetFileRequest, req, done)
+}
+
 func invokeWithClosure(endpoint entity.Endpoint, rpcClient *rpc.RaftClient, path string, req proto2.Message,
 	done *RpcResponseClosure) mono.Mono {
 	body, err := ptypes.MarshalAny(req)

@@ -47,7 +47,7 @@ type ReadOnlyOperator struct {
 	rwLock              sync.RWMutex
 	fsmCaller           FSMCaller
 	err                 *entity.RaftError
-	raftOpt             RaftOptions
+	raftOpt             RaftOption
 	node                *nodeImpl
 	replicatorGroup     *ReplicatorGroup
 	raftClientOperator  *RaftClientOperator

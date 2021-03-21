@@ -11,9 +11,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/ptypes"
 	polerpc "github.com/pole-group/pole-rpc"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/pole-group/lraft/entity"
 	proto2 "github.com/pole-group/lraft/proto"
@@ -433,4 +433,36 @@ type InstallSnapshotResponseClosure struct {
 
 type TimeoutNowResponseClosure struct {
 	RpcResponseClosure
+}
+
+type FirstSnapshotLoadDone struct {
+	reader     SnapshotReader
+	eventLatch *sync.WaitGroup
+	st         entity.Status
+	f          func(st entity.Status)
+}
+
+func newFirstSnapshotLoadDone(reader SnapshotReader, f func(st entity.Status)) *FirstSnapshotLoadDone {
+	latch := sync.WaitGroup{}
+	latch.Add(1)
+	return &FirstSnapshotLoadDone{
+		reader:     reader,
+		eventLatch: &latch,
+		st:         entity.StatusOK(),
+		f:          f,
+	}
+}
+
+func (fsl *FirstSnapshotLoadDone) Run(status entity.Status) {
+	fsl.st = status
+	fsl.f(status)
+	fsl.eventLatch.Done()
+}
+
+func (fsl *FirstSnapshotLoadDone) waitForRun() {
+	fsl.eventLatch.Wait()
+}
+
+func (fsl *FirstSnapshotLoadDone) Start() SnapshotReader {
+	return fsl.reader
 }

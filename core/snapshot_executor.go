@@ -9,6 +9,7 @@ import (
 
 	"github.com/pole-group/lraft/entity"
 	raft "github.com/pole-group/lraft/proto"
+	"github.com/pole-group/lraft/utils"
 )
 
 type DownloadingSnapshot struct {
@@ -56,10 +57,6 @@ func (sd *saveSnapshotDone) Start(meta *raft.SnapshotMeta) SnapshotWriter {
 	return sd.writer
 }
 
-func onSnapshotSaveDone(st entity.Status, meta *raft.SnapshotMeta, writer SnapshotWriter, executor *SnapshotExecutor) {
-
-}
-
 type SnapshotExecutorOptions func(opt *SnapshotExecutorOption)
 
 type SnapshotExecutorOption struct {
@@ -74,7 +71,15 @@ type SnapshotExecutorOption struct {
 }
 
 func newSnapshotExecutor(options ...SnapshotExecutorOptions) (*SnapshotExecutor, error) {
-	return nil, nil
+	opt := new(SnapshotExecutorOption)
+
+	for _, option := range options {
+		option(opt)
+	}
+
+	executor := &SnapshotExecutor{}
+	_, err := executor.Init(opt)
+	return executor, err
 }
 
 type SnapshotExecutor struct {
@@ -83,19 +88,73 @@ type SnapshotExecutor struct {
 	lastSnapshotIndex   int64
 	term                int64
 	savingSnapshot      int32
-	loadingSnapshot     int32
-	stopped             int32
+	loadingSnapshot     bool
+	stopped             bool
 	fsmCaller           FSMCaller
-	snapshotStorage     SnapshotStorage
+	snapshotStorage     *LocalSnapshotStorage
 	curCopier           SnapshotCopier
 	logMgn              LogManager
+	runningJobs         int32
 	loadingSnapshotMeta raft.SnapshotMeta
 	downloadingSnapshot atomic.Value // DownloadingSnapshot
 }
 
-func (se *SnapshotExecutor) Init(arg interface{}) error {
+func (se *SnapshotExecutor) Init(arg interface{}) (bool, error) {
 	opt := arg.(*SnapshotExecutorOption)
-	return nil
+
+	se.logMgn = opt.logMgn
+	se.fsmCaller = opt.FsmCaller
+	se.node = opt.node
+	se.term = opt.initTerm
+	storage, err := newSnapshotStorage(func(storageOpt *SnapshotStorageOption) {
+		storageOpt.Uri = opt.Uri
+		storageOpt.RaftOpt = opt.node.GetRaftOptions()
+	})
+
+	if err != nil {
+		return false, err
+	}
+
+	se.snapshotStorage = storage
+	se.snapshotStorage.filterBeforeCopyRemote = opt.FilterBeforeCopyRemote
+	se.snapshotStorage.snapshotThrottle = opt.SnapshotThrottle
+
+	if err := se.snapshotStorage.Init(nil); err != nil {
+		utils.RaftLog.Error("fail to init snapshot storage")
+		return false, err
+	}
+
+	se.snapshotStorage.addr = opt.Addr
+	reader := storage.Open()
+	if reader == nil {
+		return true, nil
+	}
+	meta := reader.Load()
+	if meta == nil {
+		utils.RaftLog.Error("fail to load meta from : %s", opt.Uri)
+		return false, reader.Close()
+	}
+
+	utils.RaftLog.Info("loading snapshot, meta : %#v", meta)
+	se.loadingSnapshot = true
+	se.runningJobs++
+
+	done := newFirstSnapshotLoadDone(reader, func(st entity.Status) {
+		se.onSnapshotLoadDone(st)
+	})
+	if err := utils.RequireTrue(se.fsmCaller.OnSnapshotLoad(done), "first load snapshot must success"); err != nil {
+		return false, err
+	}
+
+	defer reader.Close()
+	done.waitForRun()
+
+	if !done.st.IsOK() {
+		utils.RaftLog.Error("fail to load snapshot from %s, FirstSnapshotLoadDone status is %s", opt.Uri, done.st)
+		return false, nil
+	}
+
+	return true, nil
 }
 
 func (se *SnapshotExecutor) Shutdown() {
@@ -114,6 +173,18 @@ func (se *SnapshotExecutor) InstallSnapshot(req *raft.InstallSnapshotRequest, do
 
 }
 
+func (se *SnapshotExecutor) registerDownloadingSnapshot(ds *DownloadingSnapshot) {
+
+}
+
+func (se *SnapshotExecutor) onSnapshotLoadDone(st entity.Status) {
+
+}
+
+func (se *SnapshotExecutor) onSnapshotSaveDone(st entity.Status, meta *raft.SnapshotMeta, writer SnapshotWriter) {
+
+}
+
 func (se *SnapshotExecutor) stopDownloadingSnapshot(newTerm int64) {
 
 }
@@ -122,6 +193,6 @@ func (se *SnapshotExecutor) IsInstallingSnapshot() bool {
 	return se.downloadingSnapshot.Load() != nil
 }
 
-func (se *SnapshotExecutor) GetSnapshotStorage() SnapshotStorage {
+func (se *SnapshotExecutor) GetSnapshotStorage() *LocalSnapshotStorage {
 	return se.snapshotStorage
 }

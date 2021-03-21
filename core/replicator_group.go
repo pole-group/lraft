@@ -28,7 +28,7 @@ func (rt ReplicatorType) IsLearner() bool {
 
 type ReplicatorGroup struct {
 	node               *nodeImpl
-	raftOpt            RaftOptions
+	raftOpt            RaftOption
 	commonOptions      *replicatorOptions
 	replicators        *utils.ConcurrentMap // <string, *Replicator>
 	failureReplicators *utils.ConcurrentMap // <string, ReplicatorType>

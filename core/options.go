@@ -86,7 +86,7 @@ const (
 	ReadOnlySafe       ReadOnlyOption = "ReadOnlySafe"
 )
 
-type RaftOptions struct {
+type RaftOption struct {
 	EnableLogEntryChecksum    bool
 	StepDownWhenVoteTimeout   bool
 	ReadOnlyOpt               ReadOnlyOption
@@ -94,6 +94,7 @@ type RaftOptions struct {
 	MaxEntriesSize            int32
 	MaxAppendBufferEntries    int32
 	MaxBodySize               int32
+	MaxByteCountPerRpc        int32
 }
 
 type replicatorOptions struct {
@@ -106,7 +107,7 @@ type replicatorOptions struct {
 	ballotBox                 *BallotBox
 	node                      *nodeImpl
 	term                      int64
-	snapshotStorage           SnapshotStorage
+	snapshotStorage           *LocalSnapshotStorage
 	raftRpcOperator           *RaftClientOperator
 	replicatorType            ReplicatorType
 }
@@ -143,4 +144,7 @@ type FSMCallerOptions struct {
 }
 
 type SnapshotCopierOptions struct {
+	raftClientService *RaftClientOperator
+	raftOpt           *RaftOption
+	nodeOpt           *NodeOptions
 }

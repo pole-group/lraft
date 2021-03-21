@@ -99,22 +99,22 @@ type Replicator struct {
 	statInfo               Stat
 	state                  ReplicatorState
 	reqSeq                 int64
-	requiredNextSeq        int64
-	version                int32 //TODO 该字段的用处
-	seqGenerator           int64
-	waitId                 int64
-	reader                 SnapshotReader
-	catchUpClosure         *CatchUpClosure
-	rpcInFly               *InFlight
-	inFlights              *list.List    // <*InFlight>
-	pendingResponses       *responseHeap // rpcResponse
-	options                *replicatorOptions
-	raftOptions            RaftOptions
-	heartbeatInFly         polerpc.Future
-	timeoutNowInFly        polerpc.Future
-	blockFuture            polerpc.Future
-	destroy                bool
-	futures                *polerpc.ConcurrentSlice // polerpc.Future
+	requiredNextSeq  int64
+	version          int32 //TODO 该字段的用处
+	seqGenerator     int64
+	waitId           int64
+	reader           SnapshotReader
+	catchUpClosure   *CatchUpClosure
+	rpcInFly         *InFlight
+	inFlights        *list.List    // <*InFlight>
+	pendingResponses *responseHeap // rpcResponse
+	options          *replicatorOptions
+	raftOptions      RaftOption
+	heartbeatInFly   polerpc.Future
+	timeoutNowInFly  polerpc.Future
+	blockFuture      polerpc.Future
+	destroy          bool
+	futures          *polerpc.ConcurrentSlice // polerpc.Future
 }
 
 type rpcResponse struct {
@@ -163,7 +163,7 @@ func (h *responseHeap) Pop() interface{} {
 }
 
 //newReplicator 创建一个新的复制者
-func newReplicator(opts *replicatorOptions, raftOpts RaftOptions) *Replicator {
+func newReplicator(opts *replicatorOptions, raftOpts RaftOption) *Replicator {
 	return &Replicator{
 		lock:             &sync.Mutex{},
 		options:          opts,
