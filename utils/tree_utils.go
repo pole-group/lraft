@@ -1,3 +1,7 @@
+// Copyright (c) 2020, pole-group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package utils
 
 import (
@@ -249,6 +253,13 @@ func (tMap *TreeMap) Put(key, val interface{}) {
 	tMap.Insert(entry, true)
 }
 
+func (tMap *TreeMap) RemoveKey(key interface{}) {
+	entry := mapEntry{
+		key: key,
+	}
+	tMap.Delete(entry)
+}
+
 func (tMap *TreeMap) Get(key interface{}) interface{} {
 	entry := mapEntry{
 		key: key,
@@ -268,13 +279,41 @@ func (tMap *TreeMap) RangeEntry(consumer func(k, v interface{})) {
 	})
 }
 
+func (tMap *TreeMap) RangeLessThan(key interface{}, consumer func(k, v interface{})) {
+	tMap.rangeLessThan(mapEntry{
+		key: key,
+	}, tMap.root, consumer)
+}
+
+func (tMap *TreeMap) rangeLessThan(entry mapEntry, root *node, consumer func(k, v interface{})) {
+	if root != nil {
+		goR := false
+		// 如果当前 root 的 值都比 entry 来得大，一定不需要进入右子树进行遍历
+		if tMap.keyCompare(entry, root.val) <= 0 {
+			e := root.val.(mapEntry)
+			consumer(e.key, e.val)
+			goR = true
+		}
+		if root.left != nil {
+			if tMap.keyCompare(entry, root.left.val) <= 0 {
+				tMap.rangeLessThan(entry, root.left, consumer)
+			}
+		}
+		if root.right != nil && goR {
+			if tMap.keyCompare(entry, root.right.val) <= 0 {
+				tMap.rangeLessThan(entry, root.right, consumer)
+			}
+		}
+	}
+}
+
 func (tMap *TreeMap) ComputeIfAbsent(key interface{}, supplier func() interface{}) interface{} {
 	keyEntry := mapEntry{
 		key: key,
 		val: nil,
 	}
 	targetEntry := tMap.insertIfValueNotExist(keyEntry, supplier, tMap.root, nil)
-	tMap.size ++
+	tMap.size++
 	return targetEntry.val
 }
 
@@ -302,4 +341,9 @@ func (tMap *TreeMap) Size() int64 {
 
 func (tMap *TreeMap) IsEmpty() bool {
 	return tMap.size == 0
+}
+
+func (tMap *TreeMap) Clear() {
+	tMap.size = 0
+	tMap.root = nil
 }

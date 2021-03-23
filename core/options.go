@@ -1,3 +1,7 @@
+// Copyright (c) 2020, pole-group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package core
 
 import (
@@ -6,8 +10,27 @@ import (
 	"github.com/pole-group/lraft/entity"
 )
 
+type RpcOptions struct {
+	RpcConnectTimeoutMs        int32
+	RpcDefaultTimeout          int32
+	RpcInstallSnapshotTimeout  int32
+	RpcProcessorThreadPoolSize int32
+	EnableRpcChecksum          bool
+}
+
+func NewDefaultRpcOptions() RpcOptions {
+	return RpcOptions{
+		RpcConnectTimeoutMs:        1000,
+		RpcDefaultTimeout:          5000,
+		RpcInstallSnapshotTimeout:  5 * 60 * 1000,
+		RpcProcessorThreadPoolSize: 80,
+		EnableRpcChecksum:          false,
+	}
+}
+
 type NodeOptions struct {
 	ElectionTimeoutMs        int64
+	ElectionMaxDelayMs       int64
 	ElectionPriority         entity.ElectionPriority
 	DecayPriorityGap         int32
 	LeaderLeaseTimeRatio     int32
@@ -31,7 +54,7 @@ type NodeOptions struct {
 func NewDefaultNodeOptions() NodeOptions {
 	return NodeOptions{
 		ElectionTimeoutMs:        1000,
-		ElectionPriority:         entity.Disabled,
+		ElectionPriority:         entity.ElectionPriorityDisabled,
 		DecayPriorityGap:         10,
 		LeaderLeaseTimeRatio:     90,
 		SnapshotIntervalSecs:     3600,
@@ -52,6 +75,10 @@ func NewDefaultNodeOptions() NodeOptions {
 	}
 }
 
+func (opts NodeOptions) getLeaderLeaseTimeoutMs() int64 {
+	return opts.ElectionTimeoutMs * int64(opts.LeaderLeaseTimeRatio) / 100
+}
+
 type ReadOnlyOption string
 
 const (
@@ -59,27 +86,47 @@ const (
 	ReadOnlySafe       ReadOnlyOption = "ReadOnlySafe"
 )
 
-type RaftOptions struct {
-	ReadOnlyOpt ReadOnlyOption
-}
-
-func (ro RaftOptions) GetMaxReplicatorInflightMsgs() int64 {
-	return 0
+type RaftOption struct {
+	EnableLogEntryChecksum    bool
+	StepDownWhenVoteTimeout   bool
+	ReadOnlyOpt               ReadOnlyOption
+	MaxReplicatorInflightMsgs int64
+	MaxEntriesSize            int32
+	MaxAppendBufferEntries    int32
+	MaxBodySize               int32
+	MaxByteCountPerRpc        int32
 }
 
 type replicatorOptions struct {
 	dynamicHeartBeatTimeoutMs int32
 	electionTimeoutMs         int32
 	groupID                   string
-	serverId                  *entity.PeerId
-	peerId                    *entity.PeerId
+	serverId                  entity.PeerId
+	peerId                    entity.PeerId
 	logMgn                    LogManager
 	ballotBox                 *BallotBox
 	node                      *nodeImpl
 	term                      int64
-	snapshotStorage           SnapshotStorage
-	raftRpcOperator           RaftClientOperator
+	snapshotStorage           *LocalSnapshotStorage
+	raftRpcOperator           *RaftClientOperator
 	replicatorType            ReplicatorType
+}
+
+func (r *replicatorOptions) Copy() *replicatorOptions {
+	return &replicatorOptions{
+		dynamicHeartBeatTimeoutMs: r.dynamicHeartBeatTimeoutMs,
+		electionTimeoutMs:         r.electionTimeoutMs,
+		groupID:                   r.groupID,
+		serverId:                  r.serverId,
+		peerId:                    r.peerId,
+		logMgn:                    r.logMgn,
+		ballotBox:                 r.ballotBox,
+		node:                      r.node,
+		term:                      r.term,
+		snapshotStorage:           r.snapshotStorage,
+		raftRpcOperator:           r.raftRpcOperator,
+		replicatorType:            r.replicatorType,
+	}
 }
 
 type BallotBoxOptions struct {
@@ -97,4 +144,7 @@ type FSMCallerOptions struct {
 }
 
 type SnapshotCopierOptions struct {
+	raftClientService *RaftClientOperator
+	raftOpt           *RaftOption
+	nodeOpt           *NodeOptions
 }

@@ -1,3 +1,7 @@
+// Copyright (c) 2020, pole-group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package core
 
 import (
@@ -7,13 +11,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/ptypes"
+	polerpc "github.com/pole-group/pole-rpc"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/pole-group/lraft/entity"
 	proto2 "github.com/pole-group/lraft/proto"
 	"github.com/pole-group/lraft/rpc"
-	"github.com/pole-group/lraft/transport"
 	"github.com/pole-group/lraft/utils"
 )
 
@@ -42,7 +46,7 @@ func (cq *ClosureQueue) Clear() {
 	cq.firstIndex = 0
 	cq.lock.Unlock()
 
-	status := entity.NewStatus(entity.EPERM, "Leader stepped down")
+	status := entity.NewStatus(entity.EPerm, "Leader stepped down")
 
 	e := t.Front()
 	for e != nil {
@@ -55,12 +59,15 @@ func (cq *ClosureQueue) IsEmpty() bool {
 	return cq.queue.Len() == 0
 }
 
-func (cq *ClosureQueue) RestFirstIndex(firstIndex int64) {
+func (cq *ClosureQueue) RestFirstIndex(firstIndex int64) bool {
 	defer cq.lock.Unlock()
 	cq.lock.Lock()
 
-	utils.RequireTrue(cq.queue.Len() == 0, "queue is not empty.")
+	if err := utils.RequireTrue(cq.queue.Len() == 0, "queue is not empty."); err != nil {
+		return false
+	}
 	cq.firstIndex = firstIndex
+	return true
 }
 
 func (cq *ClosureQueue) AppendPendingClosure(closure Closure) {
@@ -185,7 +192,7 @@ func NewReadIndexClosure(f func(status entity.Status, index int64, reqCtx []byte
 
 	ticker := time.NewTicker(timeout)
 
-	utils.NewGoroutine(context.Background(), func(ctx context.Context) {
+	polerpc.Go(context.Background(), func(arg interface{}) {
 		for {
 			select {
 			case <-ticker.C:
@@ -194,7 +201,7 @@ func NewReadIndexClosure(f func(status entity.Status, index int64, reqCtx []byte
 					return
 				}
 				rc.SetResult(InvalidLogIndex, nil)
-				rc.runUserCallback(entity.NewStatus(entity.ETIMEDOUT, "read-index request timeout"))
+				rc.runUserCallback(entity.NewStatus(entity.ETimeout, "read-index request timeout"))
 				ticker.Stop()
 			}
 		}
@@ -232,12 +239,50 @@ func (rc *ReadIndexClosure) Run(status entity.Status) {
 	rc.runUserCallback(status)
 }
 
+type OnCaughtUp struct {
+	node    *nodeImpl
+	term    int64
+	peer    entity.PeerId
+	version int64
+}
+
+func (ocu *OnCaughtUp) exec(status entity.Status) {
+	onCaughtUp(ocu.node, ocu.peer, ocu.term, ocu.version, status)
+}
+
+type ConfigurationChangeClosure struct {
+	node        *nodeImpl
+	term        int64
+	leaderStart bool
+}
+
+func (ccc *ConfigurationChangeClosure) Run(st entity.Status) {
+	if st.IsOK() {
+		ccc.node.onConfigurationChangeDone(ccc.term)
+		if ccc.leaderStart {
+			ccc.node.options.Fsm.OnLeaderStart(ccc.term)
+		}
+	} else {
+		utils.RaftLog.Error("Fail to run ConfigurationChangeDone, status: %#v", st)
+	}
+}
+
 type CatchUpClosure struct {
 	maxMargin   int64
-	ctx         context.Context
+	future      polerpc.Future
 	errorWasSet bool
 	status      entity.Status
 	f           func(status entity.Status)
+}
+
+func newCatchUpClosure(f func(status entity.Status)) *CatchUpClosure {
+	return &CatchUpClosure{
+		maxMargin:   0,
+		future:      nil,
+		errorWasSet: false,
+		status:      entity.Status{},
+		f:           f,
+	}
 }
 
 func (cuc *CatchUpClosure) Run(status entity.Status) {
@@ -252,34 +297,35 @@ func (cuc *CatchUpClosure) SetMaxMargin(maxMargin int64) {
 	cuc.maxMargin = maxMargin
 }
 
-func (cuc *CatchUpClosure) GetCtx() context.Context {
-	return cuc.ctx
-}
-
-func (cuc *CatchUpClosure) IsErrorWasSet() bool {
-	return cuc.errorWasSet
-}
-
-func (cuc *CatchUpClosure) SetErrorWasSet(errorWasSet bool) {
-	cuc.errorWasSet = errorWasSet
+func (cuc *CatchUpClosure) GetFuture() polerpc.Future {
+	return cuc.future
 }
 
 type StableClosure struct {
-	FirstLogIndex int64
-	Entries       []*entity.LogEntry
-	NEntries      int32
-	f             func(status entity.Status)
+	node           *nodeImpl
+	firstLogIndex  int64
+	firstIndexKept int64
+	lastIndexKept  int64
+	lastTermKept   int64
+	nextLogIndex   int64
+	lastLogID      entity.LogId
+	entries        []*entity.LogEntry
+	nEntries       int32
+	latch          sync.WaitGroup
+	f              func(status entity.Status)
 }
 
 func NewStableClosure(entries []*entity.LogEntry, f func(status entity.Status)) *StableClosure {
 	return &StableClosure{
-		Entries: entries,
+		entries: entries,
 		f:       f,
 	}
 }
 
 func (sc *StableClosure) Run(status entity.Status) {
-	sc.f(status)
+	if sc.f != nil {
+		sc.f(status)
+	}
 }
 
 type OnErrorClosure struct {
@@ -307,12 +353,12 @@ func (rrc *RpcResponseClosure) Run(status entity.Status) {
 
 type RpcRequestClosure struct {
 	state       int32
-	rpcCtx      *rpc.RpcContext
-	defaultResp *transport.GrpcResponse
+	rpcCtx      *rpc.RPCContext
+	defaultResp *polerpc.ServerResponse
 	F           func(status entity.Status)
 }
 
-func NewRpcRequestClosure(rpcCtx *rpc.RpcContext) *RpcRequestClosure {
+func NewRpcRequestClosure(rpcCtx *rpc.RPCContext) *RpcRequestClosure {
 	return &RpcRequestClosure{
 		state:       RpcPending,
 		rpcCtx:      rpcCtx,
@@ -320,7 +366,7 @@ func NewRpcRequestClosure(rpcCtx *rpc.RpcContext) *RpcRequestClosure {
 	}
 }
 
-func NewRpcRequestClosureWithDefaultResp(rpcCtx *rpc.RpcContext, defaultResp *transport.GrpcResponse) *RpcRequestClosure {
+func NewRpcRequestClosureWithDefaultResp(rpcCtx *rpc.RPCContext, defaultResp *polerpc.ServerResponse) *RpcRequestClosure {
 	return &RpcRequestClosure{
 		state:       RpcPending,
 		rpcCtx:      rpcCtx,
@@ -328,11 +374,11 @@ func NewRpcRequestClosureWithDefaultResp(rpcCtx *rpc.RpcContext, defaultResp *tr
 	}
 }
 
-func (rrc *RpcRequestClosure) GetRpcCtx() *rpc.RpcContext {
+func (rrc *RpcRequestClosure) GetRpcCtx() *rpc.RPCContext {
 	return rrc.rpcCtx
 }
 
-func (rrc *RpcRequestClosure) SendResponse(msg *transport.GrpcResponse) {
+func (rrc *RpcRequestClosure) SendResponse(msg *polerpc.ServerResponse) {
 	if atomic.CompareAndSwapInt32(&rrc.state, RpcPending, RpcRespond) {
 		rrc.rpcCtx.SendMsg(msg)
 	}
@@ -350,12 +396,73 @@ func (rrc *RpcRequestClosure) Run(status entity.Status) {
 		panic(err)
 	}
 
-	rrc.SendResponse(&transport.GrpcResponse{
-		Label: rpc.CommonRpcErrorCommand,
-		Body:  a,
+	rrc.SendResponse(&polerpc.ServerResponse{
+		FunName: rpc.CommonRpcErrorCommand,
+		Body:    a,
 	})
+}
+
+type OnPreVoteRpcDone struct {
+	RpcResponseClosure
+	PeerId    entity.PeerId
+	Term      int64
+	StartTime time.Time
+	Req       *proto2.RequestVoteRequest
+}
+
+type OnRequestVoteRpcDone struct {
+	RpcResponseClosure
+	PeerId    entity.PeerId
+	Term      int64
+	StartTime time.Time
+	node      *nodeImpl
+	Req       *proto2.RequestVoteRequest
 }
 
 type AppendEntriesResponseClosure struct {
 	RpcResponseClosure
+}
+
+type RequestVoteResponseClosure struct {
+	RpcResponseClosure
+}
+
+type InstallSnapshotResponseClosure struct {
+	RpcResponseClosure
+}
+
+type TimeoutNowResponseClosure struct {
+	RpcResponseClosure
+}
+
+type FirstSnapshotLoadDone struct {
+	reader     SnapshotReader
+	eventLatch *sync.WaitGroup
+	st         entity.Status
+	f          func(st entity.Status)
+}
+
+func newFirstSnapshotLoadDone(reader SnapshotReader, f func(st entity.Status)) *FirstSnapshotLoadDone {
+	latch := sync.WaitGroup{}
+	latch.Add(1)
+	return &FirstSnapshotLoadDone{
+		reader:     reader,
+		eventLatch: &latch,
+		st:         entity.StatusOK(),
+		f:          f,
+	}
+}
+
+func (fsl *FirstSnapshotLoadDone) Run(status entity.Status) {
+	fsl.st = status
+	fsl.f(status)
+	fsl.eventLatch.Done()
+}
+
+func (fsl *FirstSnapshotLoadDone) waitForRun() {
+	fsl.eventLatch.Wait()
+}
+
+func (fsl *FirstSnapshotLoadDone) Start() SnapshotReader {
+	return fsl.reader
 }

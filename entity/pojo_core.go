@@ -1,3 +1,7 @@
+// Copyright (c) 2020, pole-group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package entity
 
 import (
@@ -19,7 +23,6 @@ func NewErrorResponse(code RaftErrorCode, format string, args ...interface{}) *r
 	return errResp
 }
 
-
 type Status struct {
 	state *State
 }
@@ -29,8 +32,12 @@ type State struct {
 	msg  string
 }
 
+func IsEmptyStatus(st Status) bool {
+	return "empty status" == st.GetMsg()
+}
+
 func NewEmptyStatus() Status {
-	return Status{state: &State{}}
+	return Status{state: &State{msg: "empty status"}}
 }
 
 func NewStatus(code RaftErrorCode, msg string) Status {
@@ -97,37 +104,41 @@ type LogId struct {
 	term  int64
 }
 
-func NewEmptyLogID() *LogId {
-	return &LogId{
-		index: 0,
-		term:  0,
+func NewEmptyLogID() LogId {
+	return LogId{
+		index: -1,
+		term:  -1,
 	}
 }
 
-func NewLogID(index, term int64) *LogId {
-	return &LogId{
+func IsEmptyLogID(id LogId) bool {
+	return id.index == -1 && id.term == -1
+}
+
+func NewLogID(index, term int64) LogId {
+	return LogId{
 		index: index,
 		term:  term,
 	}
 }
 
-func (l *LogId) SetIndex(index int64) {
+func (l LogId) SetIndex(index int64) {
 	l.index = index
 }
 
-func (l *LogId) SetTerm(term int64) {
+func (l LogId) SetTerm(term int64) {
 	l.term = term
 }
 
-func (l *LogId) GetIndex() int64 {
+func (l LogId) GetIndex() int64 {
 	return l.index
 }
 
-func (l *LogId) GetTerm() int64 {
+func (l LogId) GetTerm() int64 {
 	return l.term
 }
 
-func (l *LogId) Compare(other *LogId) int64 {
+func (l LogId) Compare(other LogId) int64 {
 	c := l.term - other.term
 	if c == 0 {
 		return l.index - other.index
@@ -135,23 +146,24 @@ func (l *LogId) Compare(other *LogId) int64 {
 	return c
 }
 
-func (l *LogId) IsEquals(other *LogId) bool {
+func (l LogId) IsEquals(other LogId) bool {
 	if l == other {
 		return true
-	}
-	if other == nil {
-		return false
 	}
 	return l.index == other.index && l.term == other.term
 }
 
-func (l *LogId) Checksum() uint64 {
+func (l LogId) Checksum() uint64 {
 	buf := bytes.NewBuffer([]byte{})
 	err := binary.Write(buf, binary.LittleEndian, l.index)
 	utils.CheckErr(err)
 	err = binary.Write(buf, binary.LittleEndian, l.term)
 	utils.CheckErr(err)
 	return utils.Checksum(buf.Bytes())
+}
+
+func (l LogId) Copy() LogId {
+	return NewLogID(l.index, l.term)
 }
 
 // Ballot start
@@ -198,7 +210,7 @@ func (b *Ballot) Init(conf, oldConf *Configuration) bool {
 	return true
 }
 
-func (b *Ballot) FindPeer(peer *PeerId, peers []*UnFoundPeerId, hint int64) *UnFoundPeerId {
+func (b *Ballot) FindPeer(peer PeerId, peers []*UnFoundPeerId, hint int64) *UnFoundPeerId {
 	if hint < 0 || hint > int64(len(b.peers)) || b.peers[hint].peerId.Equal(peer) {
 		for _, ufp := range b.peers {
 			if ufp.peerId.Equal(peer) {
@@ -210,7 +222,7 @@ func (b *Ballot) FindPeer(peer *PeerId, peers []*UnFoundPeerId, hint int64) *UnF
 	return b.peers[hint]
 }
 
-func (b *Ballot) Grant(peer *PeerId) PosHint {
+func (b *Ballot) Grant(peer PeerId) PosHint {
 	return b.GrantWithHint(peer, PosHint{})
 }
 
@@ -218,7 +230,7 @@ func (b *Ballot) IsGrant() bool {
 	return b.quorum <= 0 && b.oldQuorum <= 0
 }
 
-func (b *Ballot) GrantWithHint(peer *PeerId, hint PosHint) PosHint {
+func (b *Ballot) GrantWithHint(peer PeerId, hint PosHint) PosHint {
 	ufp := b.FindPeer(peer, b.peers, hint.PosCurrentPeerId)
 	if ufp != nil {
 		if !ufp.found {
@@ -281,49 +293,64 @@ func (uf *UnFoundPeerId) GetIndex() int64 {
 // Ballot end
 
 type LeaderChangeContext struct {
-	leaderID *PeerId
-	term     int64
-	status   Status
+	LeaderID PeerId
+	Term     int64
+	Status   Status
 }
 
-func NewLeaderContext(leaderID *PeerId, term int64, status Status) LeaderChangeContext {
+func NewLeaderContext(leaderID PeerId, term int64, status Status) LeaderChangeContext {
 	return LeaderChangeContext{
-		leaderID: leaderID,
-		term:     term,
-		status:   status,
+		LeaderID: leaderID,
+		Term:     term,
+		Status:   status,
 	}
 }
 
-func (l LeaderChangeContext) GetLeaderID() *PeerId {
-	return l.leaderID
+func (l LeaderChangeContext) GetLeaderID() PeerId {
+	return l.LeaderID
 }
 
 func (l LeaderChangeContext) GetTerm() int64 {
-	return l.term
+	return l.Term
 }
 
 func (l LeaderChangeContext) GetStatus() Status {
-	return l.status
+	return l.Status
 }
 
 func (l LeaderChangeContext) Copy() LeaderChangeContext {
 	return LeaderChangeContext{
-		leaderID: l.leaderID,
-		term:     l.term,
-		status:   l.status,
+		LeaderID: l.LeaderID,
+		Term:     l.Term,
+		Status:   l.Status,
 	}
 }
 
 type LogEntry struct {
 	LogType     raft.EntryType
-	LogID       *LogId
-	Peers       []*PeerId
-	OldPeers    []*PeerId
-	Learners    []*PeerId
-	OldLearners []*PeerId
+	LogID       LogId
+	Peers       []PeerId
+	OldPeers    []PeerId
+	Learners    []PeerId
+	OldLearners []PeerId
 	Data        []byte
-	checksum    int64
+	checksum    uint64
 	HasChecksum bool
+}
+
+func ToLogEntry(log *raft.PBLogEntry) *LogEntry {
+	entry := &LogEntry{
+		LogType:     log.Type,
+		LogID:       NewLogID(log.Index, log.Term),
+		Peers:       BatchParsePeerFromBytes(log.Peers),
+		OldPeers:    BatchParsePeerFromBytes(log.OldPeers),
+		Learners:    BatchParsePeerFromBytes(log.Learners),
+		OldLearners: BatchParsePeerFromBytes(log.OldLearners),
+		Data:        log.Data,
+		checksum:    log.Checksum,
+		HasChecksum: true,
+	}
+	return entry
 }
 
 func NewLogEntry(t raft.EntryType) *LogEntry {
@@ -338,6 +365,10 @@ func (le *LogEntry) HasLearners() bool {
 	return l || ol
 }
 
+func (le *LogEntry) GetChecksum() uint64 {
+	return le.checksum
+}
+
 func (le *LogEntry) Checksum() uint64 {
 	c := utils.Checksum2Long(uint64(le.LogType.Number()), le.LogID.Checksum())
 	c = le.checksumPeers(le.Peers, c)
@@ -350,13 +381,13 @@ func (le *LogEntry) Checksum() uint64 {
 	return c
 }
 
-func (le *LogEntry) SetChecksum(checksum int64) {
+func (le *LogEntry) SetChecksum(checksum uint64) {
 	le.checksum = checksum
 	le.HasChecksum = true
 }
 
 func (le *LogEntry) IsCorrupted() bool {
-	return le.HasChecksum && le.checksum != int64(le.Checksum())
+	return le.HasChecksum && le.checksum != uint64(le.Checksum())
 }
 
 func (le *LogEntry) Encode() []byte {
@@ -367,7 +398,7 @@ func (le *LogEntry) Encode() []byte {
 		Peers:       le.encodePeers(le.Peers),
 		OldPeers:    le.encodePeers(le.OldPeers),
 		Data:        le.Data,
-		Checksum:    int64(le.Checksum()),
+		Checksum:    le.Checksum(),
 		Learners:    le.encodePeers(le.Learners),
 		OldLearners: le.encodePeers(le.OldLearners),
 	}
@@ -382,7 +413,7 @@ func (le *LogEntry) Decode(b []byte) {
 	utils.CheckErr(err)
 }
 
-func (le *LogEntry) encodePeers(peers []*PeerId) [][]byte {
+func (le *LogEntry) encodePeers(peers []PeerId) [][]byte {
 	result := make([][]byte, len(peers))
 	for i := 0; i < len(peers); i++ {
 		result[i] = peers[i].Encode()
@@ -390,7 +421,7 @@ func (le *LogEntry) encodePeers(peers []*PeerId) [][]byte {
 	return result
 }
 
-func (le *LogEntry) checksumPeers(peers []*PeerId, c uint64) uint64 {
+func (le *LogEntry) checksumPeers(peers []PeerId, c uint64) uint64 {
 	if peers != nil && len(peers) != 0 {
 		for _, peer := range peers {
 			c = utils.Checksum2Long(c, peer.Checksum())
@@ -399,32 +430,33 @@ func (le *LogEntry) checksumPeers(peers []*PeerId, c uint64) uint64 {
 	return c
 }
 
+func IsEmptyNodeID(nodeId NodeId) bool {
+	return nodeId.GroupID == "" && nodeId.Peer.IsEmpty()
+}
+
 type NodeId struct {
 	GroupID string
-	Peer    *PeerId
+	Peer    PeerId
 	desc    string
 }
 
-func (n *NodeId) GetDesc() string {
+func (n NodeId) GetDesc() string {
 	if n.desc == "" {
 		n.desc = "<" + n.GroupID + "/" + n.Peer.GetDesc() + ">"
 	}
 	return n.desc
 }
 
-func (n *NodeId) Equal(other *NodeId) bool {
+func (n NodeId) Equal(other NodeId) bool {
 	if n == other {
 		return true
 	}
-	if other == nil {
+	if IsEmptyNodeID(other) {
 		return false
 	}
 	a := strings.Compare(n.GroupID, other.GroupID) == 0
-	b := n.Peer != nil && other.Peer != nil
+	b := n.Peer.IsEmpty() && other.Peer.IsEmpty()
 	return a && b && n.Peer.Equal(other.Peer)
-}
-
-type Task struct {
 }
 
 type UserLog struct {

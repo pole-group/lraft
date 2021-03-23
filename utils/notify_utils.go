@@ -1,3 +1,7 @@
+// Copyright (c) 2020, pole-group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package utils
 
 import (
@@ -7,20 +11,21 @@ import (
 	"math"
 	"sync"
 	"time"
+
+	polerpc "github.com/pole-group/pole-rpc"
 )
 
 var (
-	ErrorEventNotRegister = errors.New("the event was not registered")
-	ErrorEventRegister    = errors.New("register event publisher failed")
-	ErrorAddSubscriber    = errors.New("add subscriber failed")
-	publisherCenter       *PublisherCenter
-	publisherOnce         sync.Once
-
-	defaultFastRingBufferSize = GetInt64FromEnvOptional("github.com/pole-group/lraft.notify.fast-event-buffer.size", 16384)
+	ErrorEventNotRegister     = errors.New("the event was not registered")
+	ErrorEventRegister        = errors.New("register event publisher failed")
+	ErrorAddSubscriber        = errors.New("add subscriber failed")
+	publisherCenter           *PublisherCenter
+	publisherOnce             sync.Once
+	defaultFastRingBufferSize = GetInt64FromEnvOptional("lraft.notify.fast-event-buffer.size", 16384)
 )
 
 type PublisherCenter struct {
-	Publishers    sync.Map
+	Publishers    *polerpc.ConcurrentMap // <string:event_name, *Publisher >
 	hasSubscriber bool
 	// just for test
 	onExpire func(event Event)
@@ -29,7 +34,7 @@ type PublisherCenter struct {
 func InitPublisherCenter() {
 	publisherOnce.Do(func() {
 		publisherCenter = &PublisherCenter{
-			Publishers:    sync.Map{},
+			Publishers:    &polerpc.ConcurrentMap{},
 			hasSubscriber: false,
 		}
 	})
@@ -45,28 +50,28 @@ func RegisterPublisher(ctx context.Context, event Event, ringBufferSize int64) e
 	}
 	topic := event.Name()
 
-	publisherCenter.Publishers.LoadOrStore(topic, &Publisher{
-		queue:        make(chan eventHolder, ringBufferSize),
-		topic:        topic,
-		subscribers:  &sync.Map{},
-		lastSequence: -1,
-		ctx:          ctx,
+	publisherCenter.Publishers.ComputeIfAbsent(topic, func() interface{} {
+		return &Publisher{
+			queue:        make(chan eventHolder, ringBufferSize),
+			topic:        topic,
+			subscribers:  &sync.Map{},
+			lastSequence: -1,
+			ctx:          ctx,
+		}
 	})
 
-	p, ok := publisherCenter.Publishers.Load(topic)
+	p := publisherCenter.Publishers.Get(topic)
 
-	if ok {
-		publisher := p.(*Publisher)
-		publisher.start()
-
-		return nil
+	if p == nil {
+		return ErrorEventRegister
 	}
-	return ErrorEventRegister
-
+	publisher := p.(*Publisher)
+	publisher.start()
+	return nil
 }
 
 func PublishEvent(event ...Event) error {
-	if p, ok := publisherCenter.Publishers.Load(event[0].Name()); ok {
+	if p := publisherCenter.Publishers.Get(event[0].Name()); p != nil {
 		p.(*Publisher).PublishEvent(event...)
 		return nil
 	}
@@ -74,7 +79,7 @@ func PublishEvent(event ...Event) error {
 }
 
 func PublishEventNonBlock(event ...Event) (bool, error) {
-	if p, ok := publisherCenter.Publishers.Load(event[0].Name()); ok {
+	if p := publisherCenter.Publishers.Get(event[0].Name()); p != nil {
 		return p.(*Publisher).PublishEventNonBlock(event...), nil
 	}
 	return false, ErrorEventNotRegister
@@ -82,7 +87,7 @@ func PublishEventNonBlock(event ...Event) (bool, error) {
 
 func RegisterSubscriber(s Subscriber) error {
 	topic := s.SubscribeType()
-	if v, ok := publisherCenter.Publishers.Load(topic.Name()); ok {
+	if v := publisherCenter.Publishers.Get(topic.Name()); v != nil {
 		p := v.(*Publisher)
 		(*p).AddSubscriber(s)
 		return nil
@@ -92,17 +97,16 @@ func RegisterSubscriber(s Subscriber) error {
 
 func DeregisterSubscriber(s Subscriber) {
 	topic := s.SubscribeType()
-	if v, ok := publisherCenter.Publishers.Load(topic); ok {
+	if v := publisherCenter.Publishers.Get(topic.Name()); v != nil {
 		p := v.(*Publisher)
 		(*p).RemoveSubscriber(s)
 	}
 }
 
 func Shutdown() {
-	publisherCenter.Publishers.Range(func(key, value interface{}) bool {
-		p := key.(*Publisher)
+	publisherCenter.Publishers.ForEach(func(k, v interface{}) {
+		p := v.(*Publisher)
 		(*p).shutdown()
-		return true
 	})
 }
 
@@ -148,7 +152,7 @@ func (p *Publisher) start() {
 }
 
 func (p *Publisher) PublishEvent(event ...Event) {
-	if !p.isClosed {
+	if p.isClosed {
 		return
 	}
 	p.queue <- eventHolder{
@@ -157,7 +161,7 @@ func (p *Publisher) PublishEvent(event ...Event) {
 }
 
 func (p *Publisher) PublishEventNonBlock(events ...Event) bool {
-	if !p.isClosed {
+	if p.isClosed {
 		return false
 	}
 	select {
@@ -167,6 +171,22 @@ func (p *Publisher) PublishEventNonBlock(events ...Event) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func (p *Publisher) PublishEventWithTimeout(timeout time.Duration,
+	events ...Event) (bool, error) {
+	if p.isClosed {
+		return false, fmt.Errorf("this publisher already close")
+	}
+	t := time.NewTimer(timeout)
+	select {
+	case p.queue <- eventHolder{
+		events: events,
+	}:
+		return true, nil
+	case <-t.C:
+		return false, fmt.Errorf("publish event timeout")
 	}
 }
 
@@ -192,7 +212,7 @@ func (p *Publisher) openHandler() {
 
 	defer func() {
 		if err := recover(); err != nil {
-			fmt.Printf("dispose fast event has error : %s\n", err)
+			RaftLog.Error("dispose fast event has error : %s", err)
 		}
 	}()
 
@@ -206,7 +226,7 @@ func (p *Publisher) openHandler() {
 	for {
 		select {
 		case e := <-p.queue:
-			fmt.Printf("handler receive fast event : %s\n", e)
+			RaftLog.Debug("handler receive fast event : %s", e)
 			p.notifySubscriber(e)
 		case <-p.ctx.Done():
 			p.shutdown()
@@ -225,7 +245,7 @@ func (p *Publisher) notifySubscriber(events eventHolder) {
 
 			defer func() {
 				if err := recover(); err != nil {
-					fmt.Printf("notify subscriber has error : %s \n", err)
+					RaftLog.Error("notify subscriber has error : %s", err)
 				}
 			}()
 

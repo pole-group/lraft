@@ -1,10 +1,10 @@
-// Copyright (c) 2020, Conf-Group. All rights reserved.
+// Copyright (c) 2020, pole-group. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 syntax = "proto3";
 
-package core;
+package proto;
 
 import "enum.proto";
 
@@ -17,7 +17,7 @@ message EntryMeta {
   // compatibility
   repeated string oldPeers = 5;
   // Checksum fot this log entry, since 1.2.6, added by boyan@antfin.com
-  int64 checksum = 6;
+  uint64 checksum = 6;
   repeated string learners = 7;
   repeated string oldLearners = 8;
 };

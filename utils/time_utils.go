@@ -1,19 +1,24 @@
+// Copyright (c) 2020, pole-group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package utils
 
 import (
-	"context"
 	"sync/atomic"
 	"time"
+
+	polerpc "github.com/pole-group/pole-rpc"
 )
 
 var currentTimeMs int64
 var currentTimeNs int64
 
 func init() {
-	DoTickerSchedule(context.Background(), func() {
-		atomic.StoreInt64(&currentTimeMs, time.Now().Unix())
+	polerpc.DoTickerSchedule(func() {
+		atomic.StoreInt64(&currentTimeMs, time.Now().Unix()*1000)
 		atomic.StoreInt64(&currentTimeNs, time.Now().UnixNano())
-	}, time.Duration(1)*time.Millisecond)
+	}, time.Duration(100)*time.Millisecond)
 }
 
 func GetCurrentTimeMs() int64 {

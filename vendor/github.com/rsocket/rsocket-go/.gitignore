@@ -1,0 +1,30 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, build with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+*.pprof
+
+# Others
+vendor/
+
+# go-fuzz
+corpus/
+crashers/
+suppressions/
+*.zip
+
+.idea
+
+cmd/rsocket-cli/rsocket-cli
+
+coverage.txt
+
+tmp/

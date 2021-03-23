@@ -1,3 +1,7 @@
+// Copyright (c) 2020, pole-group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package entity
 
 import (
@@ -19,9 +23,9 @@ func NewEmptyConfiguration() *Configuration {
 	return &Configuration{}
 }
 
-func NewConfiguration(peers, learners []*PeerId) *Configuration {
-	var _peers []*PeerId
-	var _learners []*PeerId
+func NewConfiguration(peers, learners []PeerId) *Configuration {
+	var _peers []PeerId
+	var _learners []PeerId
 
 	for _, e := range peers {
 		_peers = append(_peers, e.Copy())
@@ -37,11 +41,11 @@ func NewConfiguration(peers, learners []*PeerId) *Configuration {
 	}
 }
 
-func (c *Configuration) AddPeers(peers []*PeerId) {
+func (c *Configuration) AddPeers(peers []PeerId) {
 	c.peers.AddAll(peers)
 }
 
-func (c *Configuration) SetPeers(peers []*PeerId) {
+func (c *Configuration) SetPeers(peers []PeerId) {
 	c.peers = utils.NewSetWithValues(peers)
 }
 
@@ -49,12 +53,12 @@ func (c *Configuration) GetPeers() *utils.Set {
 	return c.peers
 }
 
-func (c *Configuration) Contains(id *PeerId) bool {
+func (c *Configuration) Contains(id PeerId) bool {
 	return c.peers.Contain(id)
 }
 
-func (c *Configuration) ListPeers() []*PeerId {
-	ids := make([]*PeerId, 0)
+func (c *Configuration) ListPeers() []PeerId {
+	ids := make([]PeerId, 0)
 	c.peers.ToSlice(ids)
 	return ids
 }
@@ -67,16 +71,16 @@ func (c *Configuration) GetLearners() *utils.Set {
 	return c.learners
 }
 
-func (c *Configuration) SetLearners(learners []*PeerId) {
+func (c *Configuration) SetLearners(learners []PeerId) {
 	c.learners = utils.NewSetWithValues(learners)
 }
 
-func (c *Configuration) AddLearners(learners []*PeerId) {
+func (c *Configuration) AddLearners(learners []PeerId) {
 	c.learners.AddAll(learners)
 }
 
-func (c *Configuration) ListLearners() []*PeerId {
-	ids := make([]*PeerId, 0)
+func (c *Configuration) ListLearners() []PeerId {
+	ids := make([]PeerId, 0)
 	c.learners.ToSlice(ids)
 	return ids
 }
@@ -104,6 +108,10 @@ func (c *Configuration) IsEmpty() bool {
 	return c.peers.Size() == 0
 }
 
+func (c *Configuration) Size() int {
+	return c.peers.Size()
+}
+
 func (c *Configuration) Diff(rhs, included, excluded *Configuration) {
 	included.peers = utils.NewSet()
 	included.peers.RemoveAllWithSet(rhs.peers)
@@ -112,7 +120,7 @@ func (c *Configuration) Diff(rhs, included, excluded *Configuration) {
 }
 
 type ConfigurationEntry struct {
-	id      *LogId
+	id      LogId
 	conf    *Configuration
 	oldConf *Configuration
 }
@@ -121,7 +129,7 @@ func NewEmptyConfigurationEntry() *ConfigurationEntry {
 	return &ConfigurationEntry{}
 }
 
-func NewConfigurationEntry(id *LogId, conf, oldConf *Configuration) *ConfigurationEntry {
+func NewConfigurationEntry(id LogId, conf, oldConf *Configuration) *ConfigurationEntry {
 	return &ConfigurationEntry{
 		id:      id,
 		conf:    conf,
@@ -129,7 +137,7 @@ func NewConfigurationEntry(id *LogId, conf, oldConf *Configuration) *Configurati
 	}
 }
 
-func (ce *ConfigurationEntry) GetID() *LogId {
+func (ce *ConfigurationEntry) GetID() LogId {
 	return ce.id
 }
 
@@ -141,7 +149,7 @@ func (ce *ConfigurationEntry) GetOldConf() *Configuration {
 	return ce.oldConf
 }
 
-func (ce *ConfigurationEntry) SetID(id *LogId) {
+func (ce *ConfigurationEntry) SetID(id LogId) {
 	ce.id = id
 }
 
@@ -175,11 +183,11 @@ func (ce *ConfigurationEntry) IsEmpty() bool {
 	return ce.conf == nil || ce.conf.IsEmpty()
 }
 
-func (ce *ConfigurationEntry) ContainPeer(p *PeerId) bool {
+func (ce *ConfigurationEntry) ContainPeer(p PeerId) bool {
 	return ce.conf.Contains(p) || ce.oldConf.Contains(p)
 }
 
-func (ce *ConfigurationEntry) ContainLearner(l *PeerId) bool {
+func (ce *ConfigurationEntry) ContainLearner(l PeerId) bool {
 	return ce.conf.GetLearners().Contain(l) || ce.oldConf.GetLearners().Contain(l)
 }
 
@@ -213,6 +221,7 @@ func (cm *ConfigurationManager) Add(ce *ConfigurationEntry) bool {
 	return true
 }
 
+//TruncatePrefix 删除在这之前的所有数据
 func (cm *ConfigurationManager) TruncatePrefix(firstIndexKept int64) {
 	l := cm.configurations
 	for {
@@ -225,6 +234,7 @@ func (cm *ConfigurationManager) TruncatePrefix(firstIndexKept int64) {
 	cm.configurations = l
 }
 
+//TruncateSuffix 删除在这之后的所有数据
 func (cm *ConfigurationManager) TruncateSuffix(lastIndexKept int64) {
 	l := cm.configurations
 	for {
@@ -252,10 +262,14 @@ func (cm *ConfigurationManager) GetLastConfiguration() *ConfigurationEntry {
 	return cm.configurations.Front().Value.(*ConfigurationEntry)
 }
 
-func (cm *ConfigurationManager) Get(lastIncludedIndex int64) *ConfigurationEntry {
+func (cm *ConfigurationManager) Get(lastIncludedIndex int64) (*ConfigurationEntry, error) {
 	l := cm.configurations
 	if l.Len() == 0 {
-		utils.RequireTrue(lastIncludedIndex >= cm.snapshot.GetID().GetIndex(), "lastIncludedIndex %d is less than snapshot index %d", lastIncludedIndex, cm.snapshot.GetID().GetIndex())
+		if err := utils.RequireTrue(lastIncludedIndex >= cm.snapshot.GetID().GetIndex(),
+			"lastIncludedIndex %d is less than snapshot index %d", lastIncludedIndex,
+			cm.snapshot.GetID().GetIndex()); err != nil {
+			return nil, err
+		}
 	}
 
 	e := l.Front()
@@ -271,7 +285,7 @@ func (cm *ConfigurationManager) Get(lastIncludedIndex int64) *ConfigurationEntry
 	}
 
 	if e != nil && e.Prev() != nil {
-		return e.Prev().Value.(*ConfigurationEntry)
+		return e.Prev().Value.(*ConfigurationEntry), nil
 	}
-	return cm.snapshot
+	return cm.snapshot, nil
 }

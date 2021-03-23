@@ -1,3 +1,7 @@
+// Copyright (c) 2020, pole-group. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package utils
 
 import (
@@ -6,9 +10,34 @@ import (
 	"hash/crc64"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/pkg/errors"
 )
+
+const (
+	Int64MaxValue = int64(0x7fffffffffffffff)
+)
+
+type AtomicInt64 struct {
+	v int64
+}
+
+func NewAtomicInt64() AtomicInt64 {
+	return AtomicInt64{v: 0}
+}
+
+func (a AtomicInt64) Increment() int64 {
+	return atomic.AddInt64(&a.v, 1)
+}
+
+func (a AtomicInt64) Value() int64 {
+	return atomic.LoadInt64(&a.v)
+}
+
+func (a AtomicInt64) Decrement() int64 {
+	return atomic.AddInt64(&a.v, -1)
+}
 
 func AnalyzeIPAndPort(address string) (ip string, port int) {
 	s := strings.Split(address, ":")
@@ -125,4 +154,10 @@ func StringFormat(format string, args ...interface{}) string {
 	_, err := fmt.Fprintf(buf, format, args)
 	CheckErr(err)
 	return string(buf.Bytes())
+}
+
+func GetInt64FormBytes(memory []byte, index int) int64 {
+	return int64(memory[index]&0xff)<<56 | int64(memory[index+1]&0xff)<<48 | int64(
+		memory[index+2]&0xff)<<40 | int64(memory[index+3]&0xff)<<32 | int64(memory[index+4]&0xff)<<24 | int64(
+		memory[index+5]&0xff)<<16 | int64(memory[index+6]&0xff)<<8 | int64(memory[index+7]&0xff)
 }
